@@ -309,6 +309,7 @@
   var AUTH_URL = "https://edge.microsoft.com/translate/auth";
   var API_URL = "https://api-edge.cognitive.microsofttranslator.com";
   var TOKEN_TTL_MS = 8 * 60 * 1e3;
+  var MAX_TEXT_LENGTH = 5e4;
   var LANGUAGE_ALIASES = {
     zh: "zh-Hans",
     "zh-CN": "zh-Hans",
@@ -319,6 +320,18 @@
   function splitIntoChunks(items, size) {
     const chunks = [];
     for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+    return chunks;
+  }
+  function splitText(text) {
+    if (text.length <= MAX_TEXT_LENGTH) return [text];
+    const chunks = [];
+    let start = 0;
+    while (start < text.length) {
+      let end = Math.min(start + MAX_TEXT_LENGTH, text.length);
+      if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end -= 1;
+      chunks.push(text.slice(start, end));
+      start = end;
+    }
     return chunks;
   }
   var MicrosoftProvider = class extends TranslationProvider {
@@ -394,14 +407,16 @@
       const target = this.normalizeLanguage(options.targetLanguage);
       const source = options.sourceLanguage === "auto" ? "" : `&from=${encodeURIComponent(this.normalizeLanguage(options.sourceLanguage))}`;
       const path = `/translate?api-version=3.0&to=${encodeURIComponent(target)}${source}`;
-      const result = [];
-      for (const chunk of splitIntoChunks(texts, Math.min(100, Math.max(1, options.batchSize || 50)))) {
-        const data = await this.requestWithRecovery(path, chunk.map((Text) => ({ Text })), options);
+      const segments = texts.flatMap((text, index) => splitText(text).map((Text) => ({ index, Text })));
+      const result = Array(texts.length).fill("");
+      for (const chunk of splitIntoChunks(segments, Math.min(100, Math.max(1, options.batchSize || 50)))) {
+        const data = await this.requestWithRecovery(path, chunk.map(({ Text }) => ({ Text })), options);
         if (!Array.isArray(data) || data.length !== chunk.length) throw new ProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u8FD4\u56DE\u6761\u76EE\u6570\u4E0D\u5339\u914D");
-        for (const item of data) {
+        for (let index = 0; index < data.length; index += 1) {
+          const item = data[index];
           const translated = item?.translations?.[0]?.text;
           if (typeof translated !== "string") throw new ProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u7F3A\u5C11\u8BD1\u6587");
-          result.push(translated);
+          result[chunk[index].index] += translated;
         }
       }
       return result;
@@ -488,9 +503,10 @@
     for (let current = element2; current; current = current.parentElement) {
       if (SKIPPED_TAGS.has(current.tagName)) return true;
       if (CODE_TAGS.has(current.tagName)) return true;
+      const style = getComputedStyle(current);
+      if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return true;
     }
-    const style = getComputedStyle(element2);
-    return style.display === "none" || style.visibility === "hidden" || style.opacity === "0";
+    return false;
   }
   function isTranslatableTextNode(node) {
     return node?.nodeType === Node.TEXT_NODE && Boolean(node.nodeValue?.trim()) && !NON_TRANSLATABLE_TEXT.test(node.nodeValue.trim()) && !NON_TEXTUAL_CONTENT.test(node.nodeValue.trim()) && !isInsideSkippedElement(node.parentElement);
