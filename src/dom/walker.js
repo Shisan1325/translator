@@ -23,9 +23,10 @@ function isInsideSkippedElement(element) {
   for (let current = element; current; current = current.parentElement) {
     if (SKIPPED_TAGS.has(current.tagName)) return true;
     if (CODE_TAGS.has(current.tagName)) return true;
+    const style = getComputedStyle(current);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return true;
   }
-  const style = getComputedStyle(element);
-  return style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
+  return false;
 }
 
 export function isTranslatableTextNode(node) {

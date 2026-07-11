@@ -2,17 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { collectTextNodes } from '../src/dom/walker.js';
 import { MicrosoftProvider } from '../src/translator/microsoft.js';
 
-describe.skip('审查发现的待修复回归用例', () => {
+describe('审查发现的回归用例', () => {
   it('不会收集由隐藏祖先遮蔽的文本', () => {
     document.body.replaceChildren();
     const visible = document.createElement('p');
     visible.textContent = 'Visible content';
     const hidden = document.createElement('div');
     hidden.style.display = 'none';
-    hidden.append(document.createElement('span')).textContent = 'Confidential content';
+    const hiddenText = document.createElement('span');
+    hiddenText.textContent = 'Confidential content';
+    hidden.append(hiddenText);
     const transparent = document.createElement('div');
     transparent.style.opacity = '0';
-    transparent.append(document.createElement('span')).textContent = 'Also confidential';
+    const transparentText = document.createElement('span');
+    transparentText.textContent = 'Also confidential';
+    transparent.append(transparentText);
     document.body.append(visible, hidden, transparent);
 
     expect(collectTextNodes(document.body).map((node) => node.nodeValue.trim())).toEqual(['Visible content']);
@@ -37,7 +41,7 @@ describe.skip('审查发现的待修复回归用例', () => {
       batchSize: 50,
       timeoutMs: 1_000,
     })).resolves.toBe(text);
-    expect(requests.length).toBeGreaterThan(1);
+    expect(requests.flat()).toHaveLength(2);
     expect(requests.flat().every(({ Text }) => Text.length <= 50_000)).toBe(true);
   });
 });
