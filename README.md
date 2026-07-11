@@ -1,6 +1,6 @@
 # 网页翻译助手
 
-`0.1.0` 是一个基于 Microsoft Translator 的 Userscript 网页翻译工具。它尽量只替换文本节点，不重建页面 DOM，因此可用于普通网页和动态内容页面。
+`translator` 是一个基于 Microsoft Translator 的 Userscript 网页翻译工具。它尽量只替换文本节点，不重建页面 DOM，因此可用于普通网页和动态内容页面。
 
 ## 功能
 
