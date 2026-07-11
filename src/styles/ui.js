@@ -28,6 +28,9 @@ export const uiStyles = `
 .tr-toolbar.is-edge-hidden.is-hidden-left .tr-toolbar-collapse svg { transform: rotate(180deg); }
 .tr-button { appearance: none; border: 0; border-radius: 11px; min-width: 34px; height: 34px; padding: 0 10px; color: #24314a; background: transparent; cursor: pointer; font: 600 13px/1 inherit; transition: background .16s ease, transform .16s ease; }
 .tr-button:hover { background: rgba(66, 113, 255, .13); transform: translateY(-1px); }
+.tr-toolbar-site-auto { position: relative; font-weight: 800; }
+.tr-toolbar-site-auto.is-active { color: #fff; background: #477cff; }
+.tr-toolbar-site-auto.is-active:hover { background: #356af0; }
 .tr-button:focus-visible, .tr-combobox-trigger:focus-visible { outline: 2px solid #477cff; outline-offset: 2px; }
 .tr-button.tr-pointer-focused:focus-visible { outline: none; }
 .tr-toast-stack { position: fixed; right: 22px; bottom: 68px; z-index: 8; width: max-content; max-width: calc(100vw - 44px); pointer-events: none; }
@@ -116,6 +119,7 @@ export const uiStyles = `
   .tr-toolbar.is-edge-hidden .tr-toolbar-collapse:hover { color: #fff; background: rgba(51,68,107,.96); }
   .tr-button { color: #e8edfa; }
   .tr-button:hover { background: rgba(125, 160, 255, .2); }
+  .tr-toolbar-site-auto.is-active { color: #fff; background: #638cff; }
   .tr-dialog { border-color: rgba(255,255,255,.12); background: rgba(26, 34, 53, .95); }
   .tr-selection-close { color: #b5c2da; }
   .tr-selection-close:hover { color: #fff; background: #33446b; }

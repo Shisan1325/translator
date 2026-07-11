@@ -63,25 +63,11 @@ function textField(label, value, type = 'number', attributes = {}) {
   return { field, input };
 }
 
-function multilineField(label, value, attributes = {}) {
-  const field = element('label', { className: 'tr-field', text: label });
-  const input = element('textarea', { className: 'tr-input tr-textarea', attributes });
-  input.value = value;
-  field.append(input);
-  return { field, input };
-}
-
 export function openSettings(dialog, t, settings, onSave) {
   const content = element('form');
   const source = selectField(t('sourceLanguage'), settings.sourceLanguage);
   const target = selectField(t('targetLanguage'), settings.targetLanguage, false);
   const auto = new ToggleSwitch(t('autoTranslate'), settings.autoTranslate);
-  const blacklist = multilineField(t('autoTranslateBlacklist'), settings.autoTranslateBlacklist.join('\n'), {
-    rows: 3,
-    placeholder: t('autoTranslateBlacklistPlaceholder'),
-    'aria-describedby': 'tr-auto-translate-blacklist-hint',
-  });
-  const blacklistHint = element('p', { id: 'tr-auto-translate-blacklist-hint', className: 'tr-settings-hint', text: t('autoTranslateBlacklistHint') });
   const dynamic = new ToggleSwitch(t('translateDynamic'), settings.translateDynamic);
   const selection = new ToggleSwitch(t('showSelectionButton'), settings.showSelectionButton);
   const cache = new ToggleSwitch(t('cacheEnabled'), settings.cacheEnabled);
@@ -89,7 +75,7 @@ export function openSettings(dialog, t, settings, onSave) {
   batch.input.min = '1'; batch.input.max = '100';
   const timeout = textField(t('timeoutMs'), settings.timeoutMs);
   timeout.input.min = '3000'; timeout.input.max = '60000'; timeout.input.step = '1000';
-  content.append(source.field, target.field, auto.field, blacklist.field, blacklistHint, dynamic.field, selection.field, cache.field, batch.field, timeout.field);
+  content.append(source.field, target.field, auto.field, dynamic.field, selection.field, cache.field, batch.field, timeout.field);
   dialog.show({
     title: t('settings'),
     content,
@@ -103,7 +89,6 @@ export function openSettings(dialog, t, settings, onSave) {
             sourceLanguage: source.value,
             targetLanguage: target.value,
             autoTranslate: auto.checked,
-            autoTranslateBlacklist: blacklist.input.value.split(/[\n,]/),
             translateDynamic: dynamic.checked,
             showSelectionButton: selection.checked,
             cacheEnabled: cache.checked,

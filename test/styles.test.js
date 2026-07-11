@@ -19,6 +19,7 @@ describe('设置界面样式', () => {
     expect(uiStyles).toContain('.tr-toolbar-collapse svg');
     expect(uiStyles).toContain('.tr-toolbar-drag svg');
     expect(uiStyles).toContain('.tr-toolbar.is-collapsed { gap: 4px; padding: 7px; border-color: rgba(255,255,255,.8);');
+    expect(uiStyles).toContain('.tr-toolbar-site-auto.is-active { color: #fff; background: #477cff; }');
     expect(uiStyles).toContain('.tr-toolbar.is-collapsed .tr-toolbar-actions { display: none; }');
     expect(uiStyles).toContain('.tr-toolbar.is-edge-hidden');
     expect(uiStyles).toContain('.tr-toolbar.is-edge-hidden .tr-toolbar-actions { display: none; }');

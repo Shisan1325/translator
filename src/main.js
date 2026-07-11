@@ -1,5 +1,5 @@
 import { createI18n } from './i18n/index.js';
-import { isAutoTranslateBlacklisted } from './config/defaults.js';
+import { normalizeHostname, shouldAutoTranslateSite } from './config/defaults.js';
 import { MemoryTranslationCache } from './utils/cache.js';
 import { createGmApi } from './utils/gm.js';
 import { whenIdle } from './utils/idle.js';
@@ -58,12 +58,33 @@ async function bootstrap() {
     const count = controller.restore();
     toast.show(t('restored', { count }));
   };
+  const siteHostname = normalizeHostname(location.hostname);
+  const isSiteAutoTranslateEnabled = () => shouldAutoTranslateSite(siteHostname, settings);
+  const applySiteAutoTranslateChange = async (previousEnabled) => {
+    const enabled = isSiteAutoTranslateEnabled();
+    if (enabled === previousEnabled) return;
+    if (enabled) await runPage();
+    else restore();
+  };
   const saveSettings = async (next) => {
+    const previousEnabled = isSiteAutoTranslateEnabled();
     settings = await settingsStore.save(next);
     controller.refreshDynamicObserver();
+    toolbar?.setSiteAutoTranslateEnabled(isSiteAutoTranslateEnabled());
+    await applySiteAutoTranslateChange(previousEnabled);
   };
   const showSettings = () => openSettings(dialog, t, settings, saveSettings);
   const openInput = () => popup.open();
+  const setSiteAutoTranslate = async (enabled) => {
+    const previousEnabled = isSiteAutoTranslateEnabled();
+    settings = await settingsStore.save({
+      ...settings,
+      siteAutoTranslatePreferences: { ...settings.siteAutoTranslatePreferences, [siteHostname]: enabled },
+    });
+    toolbar?.setSiteAutoTranslateEnabled(isSiteAutoTranslateEnabled());
+    toast.show(t(enabled ? 'siteAutoTranslateEnabled' : 'siteAutoTranslateDisabled'));
+    await applySiteAutoTranslateChange(previousEnabled);
+  };
   const runSelection = () => {
     const text = getSelectedText();
     if (!text) {
@@ -86,12 +107,14 @@ async function bootstrap() {
     openInput,
     restore,
     openSettings: showSettings,
+    onToggleSiteAutoTranslate: setSiteAutoTranslate,
   }, {
     position: settings.toolbarPosition,
     mode: settings.toolbarMode,
     edgeRestoreMode: settings.toolbarEdgeRestoreMode,
     edgeCenterY: settings.toolbarEdgeCenterY,
     collapsed: settings.toolbarCollapsed,
+    autoTranslateForSite: isSiteAutoTranslateEnabled(),
     onStateChange: saveToolbarState,
   });
   new SelectionTranslator(root, {
@@ -108,7 +131,7 @@ async function bootstrap() {
   api.registerMenuCommand(t('restore'), restore);
   api.registerMenuCommand(t('settings'), showSettings);
 
-  if (settings.autoTranslate && !isAutoTranslateBlacklisted(location.hostname, settings.autoTranslateBlacklist)) {
+  if (isSiteAutoTranslateEnabled()) {
     await whenIdle();
     runPage();
   }

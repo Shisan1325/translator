@@ -46,7 +46,7 @@ function viewportWidth() {
 }
 
 export class Toolbar {
-  constructor(root, t, actions, { position = null, mode, collapsed = false, edgeRestoreMode = TOOLBAR_MODE.EXPANDED, edgeCenterY = null, onStateChange = () => {} } = {}) {
+  constructor(root, t, actions, { position = null, mode, collapsed = false, edgeRestoreMode = TOOLBAR_MODE.EXPANDED, edgeCenterY = null, autoTranslateForSite = false, onStateChange = () => {} } = {}) {
     this.t = t;
     this.onStateChange = onStateChange;
     this.mode = normalizeMode(mode, { collapsed });
@@ -55,6 +55,8 @@ export class Toolbar {
       : TOOLBAR_MODE.EXPANDED;
     this.edgeCenterY = Number.isFinite(Number(edgeCenterY)) ? Number(edgeCenterY) : null;
     this.preferredPosition = position;
+    this.autoTranslateForSite = Boolean(autoTranslateForSite);
+    this.onToggleSiteAutoTranslate = actions.onToggleSiteAutoTranslate || (() => {});
     this.bar = element('nav', { className: 'tr-toolbar', attributes: { 'aria-label': t('translatePage') } });
     this.dragHandle = button('', t('dragToolbar'), (event) => event.preventDefault(), 'tr-toolbar-drag');
     this.dragHandle.append(dragIcon());
@@ -62,10 +64,12 @@ export class Toolbar {
     this.actions.append(
       button('文', t('translatePage'), actions.translatePage),
       button('◉', t('translateVisible'), actions.translateVisible),
+      button('', t(this.autoTranslateForSite ? 'disableAutoTranslateForSite' : 'enableAutoTranslateForSite'), () => this.toggleSiteAutoTranslate(), 'tr-toolbar-site-auto'),
       button('⌁', t('inputTranslate'), actions.openInput),
       button('↺', t('restore'), actions.restore),
       button('⚙', t('settings'), actions.openSettings),
     );
+    this.siteAutoButton = this.actions.querySelector('.tr-toolbar-site-auto');
     this.actions.addEventListener('pointerdown', (event) => event.target.closest?.('.tr-button')?.classList.add('tr-pointer-focused'));
     this.actions.addEventListener('keydown', () => this.actions.querySelectorAll('.tr-pointer-focused').forEach((node) => node.classList.remove('tr-pointer-focused')));
     this.collapseButton = button('', t('collapseToolbar'), () => this.toggleCollapsed(), 'tr-toolbar-collapse');
@@ -85,6 +89,16 @@ export class Toolbar {
 
   get isEdgeHidden() { return this.mode === TOOLBAR_MODE.EDGE_LEFT || this.mode === TOOLBAR_MODE.EDGE_RIGHT; }
   get collapsed() { return this.mode === TOOLBAR_MODE.COLLAPSED; }
+
+  toggleSiteAutoTranslate() {
+    this.setSiteAutoTranslateEnabled(!this.autoTranslateForSite);
+    this.onToggleSiteAutoTranslate(this.autoTranslateForSite);
+  }
+
+  setSiteAutoTranslateEnabled(enabled) {
+    this.autoTranslateForSite = Boolean(enabled);
+    this.renderSiteAutoTranslate();
+  }
 
   toggleCollapsed() {
     if (this.isEdgeHidden) {
@@ -139,6 +153,17 @@ export class Toolbar {
     const key = this.isEdgeHidden ? 'showToolbar' : this.mode === TOOLBAR_MODE.COLLAPSED ? 'expandToolbar' : 'collapseToolbar';
     this.collapseButton.setAttribute('title', this.t(key));
     this.collapseButton.setAttribute('aria-label', this.t(key));
+    this.renderSiteAutoTranslate();
+  }
+
+  renderSiteAutoTranslate() {
+    if (!this.siteAutoButton) return;
+    const actionKey = this.autoTranslateForSite ? 'disableAutoTranslateForSite' : 'enableAutoTranslateForSite';
+    const statusKey = this.autoTranslateForSite ? 'siteAutoTranslateStatusEnabled' : 'siteAutoTranslateStatusDisabled';
+    this.siteAutoButton.classList.toggle('is-active', this.autoTranslateForSite);
+    this.siteAutoButton.setAttribute('title', this.t(statusKey));
+    this.siteAutoButton.setAttribute('aria-label', this.t(actionKey));
+    this.siteAutoButton.textContent = 'A';
   }
 
   place(position = this.preferredPosition) {

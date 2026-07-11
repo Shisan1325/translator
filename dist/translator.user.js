@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网页翻译助手 MVP
 // @namespace    https://github.com/local/translator-userscript
-// @version      0.1.1
+// @version      0.1.2
 // @description  高性能、模块化的网页与划词翻译工具
 // @author       MiaViaU
 // @license      MIT
@@ -57,9 +57,12 @@
       sourceLanguage: "\u6E90\u8BED\u8A00",
       targetLanguage: "\u76EE\u6807\u8BED\u8A00",
       autoTranslate: "\u81EA\u52A8\u7FFB\u8BD1\u9875\u9762",
-      autoTranslateBlacklist: "\u81EA\u52A8\u7FFB\u8BD1\u7F51\u7AD9\u9ED1\u540D\u5355",
-      autoTranslateBlacklistPlaceholder: "example.com\nnews.example.org",
-      autoTranslateBlacklistHint: "\u4E00\u884C\u4E00\u4E2A\u7F51\u7AD9\uFF1B\u586B\u5199 example.com \u4F1A\u540C\u65F6\u5339\u914D\u5176\u5B50\u57DF\u540D\u3002\u9ED1\u540D\u5355\u53EA\u963B\u6B62\u81EA\u52A8\u7FFB\u8BD1\uFF0C\u4E0D\u5F71\u54CD\u624B\u52A8\u7FFB\u8BD1\u3002",
+      enableAutoTranslateForSite: "\u5F53\u524D\u7F51\u7AD9\u9ED8\u8BA4\u81EA\u52A8\u7FFB\u8BD1",
+      disableAutoTranslateForSite: "\u5F53\u524D\u7F51\u7AD9\u9ED8\u8BA4\u4E0D\u81EA\u52A8\u7FFB\u8BD1",
+      siteAutoTranslateEnabled: "\u5DF2\u8BBE\u4E3A\u81EA\u52A8\u7FFB\u8BD1\u5F53\u524D\u7F51\u7AD9",
+      siteAutoTranslateDisabled: "\u5DF2\u8BBE\u4E3A\u4E0D\u81EA\u52A8\u7FFB\u8BD1\u5F53\u524D\u7F51\u7AD9",
+      siteAutoTranslateStatusEnabled: "\u5F53\u524D\uFF1A\u9ED8\u8BA4\u7FFB\u8BD1",
+      siteAutoTranslateStatusDisabled: "\u5F53\u524D\uFF1A\u9ED8\u8BA4\u4E0D\u7FFB\u8BD1",
       translateDynamic: "\u7FFB\u8BD1\u52A8\u6001\u5185\u5BB9",
       showSelectionButton: "\u663E\u793A\u5212\u8BCD\u6309\u94AE",
       cacheEnabled: "\u542F\u7528\u5185\u5B58\u7F13\u5B58",
@@ -103,9 +106,12 @@
       sourceLanguage: "Source language",
       targetLanguage: "Target language",
       autoTranslate: "Translate pages automatically",
-      autoTranslateBlacklist: "Auto-translate blacklist",
-      autoTranslateBlacklistPlaceholder: "example.com\nnews.example.org",
-      autoTranslateBlacklistHint: "One website per line. example.com also matches its subdomains. This only blocks automatic translation.",
+      enableAutoTranslateForSite: "Automatically translate this site",
+      disableAutoTranslateForSite: "Do not automatically translate this site",
+      siteAutoTranslateEnabled: "This site will be translated automatically",
+      siteAutoTranslateDisabled: "This site will not be translated automatically",
+      siteAutoTranslateStatusEnabled: "Current: translate by default",
+      siteAutoTranslateStatusDisabled: "Current: do not translate by default",
       translateDynamic: "Translate dynamic content",
       showSelectionButton: "Show selection button",
       cacheEnabled: "Enable memory cache",
@@ -125,7 +131,7 @@
     sourceLanguage: "auto",
     targetLanguage: "zh-Hans",
     autoTranslate: false,
-    autoTranslateBlacklist: [],
+    siteAutoTranslatePreferences: {},
     translateDynamic: true,
     showSelectionButton: true,
     cacheEnabled: true,
@@ -158,9 +164,19 @@
       return "";
     }
   }
-  function isAutoTranslateBlacklisted(hostname, blacklist = []) {
+  function getSiteAutoTranslatePreference(hostname, preferences = {}) {
     const current = normalizeHostname(hostname);
-    return Boolean(current && blacklist.some((entry) => current === entry || current.endsWith(`.${entry}`)));
+    if (!current || typeof preferences !== "object") return void 0;
+    const segments = current.split(".");
+    for (let index = 0; index < segments.length - 1; index += 1) {
+      const preference = preferences[segments.slice(index).join(".")];
+      if (typeof preference === "boolean") return preference;
+    }
+    return void 0;
+  }
+  function shouldAutoTranslateSite(hostname, settings) {
+    const preference = getSiteAutoTranslatePreference(hostname, settings.siteAutoTranslatePreferences);
+    return preference === void 0 ? settings.autoTranslate : preference;
   }
   function normalizeSettings(value = {}) {
     const settings = { ...DEFAULT_SETTINGS };
@@ -174,8 +190,19 @@
     }
     settings.sourceLanguage = String(settings.sourceLanguage || "auto");
     settings.targetLanguage = String(settings.targetLanguage || DEFAULT_SETTINGS.targetLanguage);
-    const rawBlacklist = Array.isArray(settings.autoTranslateBlacklist) ? settings.autoTranslateBlacklist : String(settings.autoTranslateBlacklist || "").split(/[\n,]/);
-    settings.autoTranslateBlacklist = [...new Set(rawBlacklist.map(normalizeHostname).filter(Boolean))].slice(0, 100);
+    const preferences = value.siteAutoTranslatePreferences && typeof value.siteAutoTranslatePreferences === "object" ? value.siteAutoTranslatePreferences : {};
+    settings.siteAutoTranslatePreferences = {};
+    for (const [hostname, enabled] of Object.entries(preferences)) {
+      const normalizedHostname = normalizeHostname(hostname);
+      if (normalizedHostname && typeof enabled === "boolean") settings.siteAutoTranslatePreferences[normalizedHostname] = enabled;
+    }
+    const legacyBlacklist = Array.isArray(value.autoTranslateBlacklist) ? value.autoTranslateBlacklist : String(value.autoTranslateBlacklist || "").split(/[\n,]/);
+    for (const hostname of legacyBlacklist) {
+      const normalizedHostname = normalizeHostname(hostname);
+      if (normalizedHostname && !(normalizedHostname in settings.siteAutoTranslatePreferences)) {
+        settings.siteAutoTranslatePreferences[normalizedHostname] = false;
+      }
+    }
     const validModes = /* @__PURE__ */ new Set(["expanded", "collapsed", "edge-left", "edge-right"]);
     settings.toolbarMode = validModes.has(value.toolbarMode) ? value.toolbarMode : value.toolbarHidden || value.toolbarEdgeHiddenV2 ? "collapsed" : settings.toolbarCollapsed ? "collapsed" : "expanded";
     settings.toolbarCollapsed = settings.toolbarMode === "collapsed";
@@ -781,6 +808,9 @@
 .tr-toolbar.is-edge-hidden.is-hidden-left .tr-toolbar-collapse svg { transform: rotate(180deg); }
 .tr-button { appearance: none; border: 0; border-radius: 11px; min-width: 34px; height: 34px; padding: 0 10px; color: #24314a; background: transparent; cursor: pointer; font: 600 13px/1 inherit; transition: background .16s ease, transform .16s ease; }
 .tr-button:hover { background: rgba(66, 113, 255, .13); transform: translateY(-1px); }
+.tr-toolbar-site-auto { position: relative; font-weight: 800; }
+.tr-toolbar-site-auto.is-active { color: #fff; background: #477cff; }
+.tr-toolbar-site-auto.is-active:hover { background: #356af0; }
 .tr-button:focus-visible, .tr-combobox-trigger:focus-visible { outline: 2px solid #477cff; outline-offset: 2px; }
 .tr-button.tr-pointer-focused:focus-visible { outline: none; }
 .tr-toast-stack { position: fixed; right: 22px; bottom: 68px; z-index: 8; width: max-content; max-width: calc(100vw - 44px); pointer-events: none; }
@@ -869,6 +899,7 @@
   .tr-toolbar.is-edge-hidden .tr-toolbar-collapse:hover { color: #fff; background: rgba(51,68,107,.96); }
   .tr-button { color: #e8edfa; }
   .tr-button:hover { background: rgba(125, 160, 255, .2); }
+  .tr-toolbar-site-auto.is-active { color: #fff; background: #638cff; }
   .tr-dialog { border-color: rgba(255,255,255,.12); background: rgba(26, 34, 53, .95); }
   .tr-selection-close { color: #b5c2da; }
   .tr-selection-close:hover { color: #fff; background: #33446b; }
@@ -981,7 +1012,7 @@
     return document.documentElement.clientWidth || window.innerWidth;
   }
   var Toolbar = class {
-    constructor(root, t, actions, { position = null, mode, collapsed = false, edgeRestoreMode = TOOLBAR_MODE.EXPANDED, edgeCenterY = null, onStateChange = () => {
+    constructor(root, t, actions, { position = null, mode, collapsed = false, edgeRestoreMode = TOOLBAR_MODE.EXPANDED, edgeCenterY = null, autoTranslateForSite = false, onStateChange = () => {
     } } = {}) {
       this.t = t;
       this.onStateChange = onStateChange;
@@ -989,6 +1020,9 @@
       this.edgeRestoreMode = [TOOLBAR_MODE.EXPANDED, TOOLBAR_MODE.COLLAPSED].includes(edgeRestoreMode) ? edgeRestoreMode : TOOLBAR_MODE.EXPANDED;
       this.edgeCenterY = Number.isFinite(Number(edgeCenterY)) ? Number(edgeCenterY) : null;
       this.preferredPosition = position;
+      this.autoTranslateForSite = Boolean(autoTranslateForSite);
+      this.onToggleSiteAutoTranslate = actions.onToggleSiteAutoTranslate || (() => {
+      });
       this.bar = element("nav", { className: "tr-toolbar", attributes: { "aria-label": t("translatePage") } });
       this.dragHandle = button("", t("dragToolbar"), (event) => event.preventDefault(), "tr-toolbar-drag");
       this.dragHandle.append(dragIcon());
@@ -996,10 +1030,12 @@
       this.actions.append(
         button("\u6587", t("translatePage"), actions.translatePage),
         button("\u25C9", t("translateVisible"), actions.translateVisible),
+        button("", t(this.autoTranslateForSite ? "disableAutoTranslateForSite" : "enableAutoTranslateForSite"), () => this.toggleSiteAutoTranslate(), "tr-toolbar-site-auto"),
         button("\u2301", t("inputTranslate"), actions.openInput),
         button("\u21BA", t("restore"), actions.restore),
         button("\u2699", t("settings"), actions.openSettings)
       );
+      this.siteAutoButton = this.actions.querySelector(".tr-toolbar-site-auto");
       this.actions.addEventListener("pointerdown", (event) => event.target.closest?.(".tr-button")?.classList.add("tr-pointer-focused"));
       this.actions.addEventListener("keydown", () => this.actions.querySelectorAll(".tr-pointer-focused").forEach((node) => node.classList.remove("tr-pointer-focused")));
       this.collapseButton = button("", t("collapseToolbar"), () => this.toggleCollapsed(), "tr-toolbar-collapse");
@@ -1021,6 +1057,14 @@
     }
     get collapsed() {
       return this.mode === TOOLBAR_MODE.COLLAPSED;
+    }
+    toggleSiteAutoTranslate() {
+      this.setSiteAutoTranslateEnabled(!this.autoTranslateForSite);
+      this.onToggleSiteAutoTranslate(this.autoTranslateForSite);
+    }
+    setSiteAutoTranslateEnabled(enabled) {
+      this.autoTranslateForSite = Boolean(enabled);
+      this.renderSiteAutoTranslate();
     }
     toggleCollapsed() {
       if (this.isEdgeHidden) {
@@ -1070,6 +1114,16 @@
       const key = this.isEdgeHidden ? "showToolbar" : this.mode === TOOLBAR_MODE.COLLAPSED ? "expandToolbar" : "collapseToolbar";
       this.collapseButton.setAttribute("title", this.t(key));
       this.collapseButton.setAttribute("aria-label", this.t(key));
+      this.renderSiteAutoTranslate();
+    }
+    renderSiteAutoTranslate() {
+      if (!this.siteAutoButton) return;
+      const actionKey = this.autoTranslateForSite ? "disableAutoTranslateForSite" : "enableAutoTranslateForSite";
+      const statusKey = this.autoTranslateForSite ? "siteAutoTranslateStatusEnabled" : "siteAutoTranslateStatusDisabled";
+      this.siteAutoButton.classList.toggle("is-active", this.autoTranslateForSite);
+      this.siteAutoButton.setAttribute("title", this.t(statusKey));
+      this.siteAutoButton.setAttribute("aria-label", this.t(actionKey));
+      this.siteAutoButton.textContent = "A";
     }
     place(position = this.preferredPosition) {
       if (position) this.preferredPosition = { left: position.left, top: position.top };
@@ -1373,24 +1427,11 @@
     field.append(input);
     return { field, input };
   }
-  function multilineField(label, value, attributes = {}) {
-    const field = element("label", { className: "tr-field", text: label });
-    const input = element("textarea", { className: "tr-input tr-textarea", attributes });
-    input.value = value;
-    field.append(input);
-    return { field, input };
-  }
   function openSettings(dialog, t, settings, onSave) {
     const content = element("form");
     const source = selectField(t("sourceLanguage"), settings.sourceLanguage);
     const target = selectField(t("targetLanguage"), settings.targetLanguage, false);
     const auto = new ToggleSwitch(t("autoTranslate"), settings.autoTranslate);
-    const blacklist = multilineField(t("autoTranslateBlacklist"), settings.autoTranslateBlacklist.join("\n"), {
-      rows: 3,
-      placeholder: t("autoTranslateBlacklistPlaceholder"),
-      "aria-describedby": "tr-auto-translate-blacklist-hint"
-    });
-    const blacklistHint = element("p", { id: "tr-auto-translate-blacklist-hint", className: "tr-settings-hint", text: t("autoTranslateBlacklistHint") });
     const dynamic = new ToggleSwitch(t("translateDynamic"), settings.translateDynamic);
     const selection = new ToggleSwitch(t("showSelectionButton"), settings.showSelectionButton);
     const cache = new ToggleSwitch(t("cacheEnabled"), settings.cacheEnabled);
@@ -1401,7 +1442,7 @@
     timeout.input.min = "3000";
     timeout.input.max = "60000";
     timeout.input.step = "1000";
-    content.append(source.field, target.field, auto.field, blacklist.field, blacklistHint, dynamic.field, selection.field, cache.field, batch.field, timeout.field);
+    content.append(source.field, target.field, auto.field, dynamic.field, selection.field, cache.field, batch.field, timeout.field);
     dialog.show({
       title: t("settings"),
       content,
@@ -1420,7 +1461,6 @@
               sourceLanguage: source.value,
               targetLanguage: target.value,
               autoTranslate: auto.checked,
-              autoTranslateBlacklist: blacklist.input.value.split(/[\n,]/),
               translateDynamic: dynamic.checked,
               showSelectionButton: selection.checked,
               cacheEnabled: cache.checked,
@@ -1728,12 +1768,33 @@
       const count = controller.restore();
       toast.show(t("restored", { count }));
     };
+    const siteHostname = normalizeHostname(location.hostname);
+    const isSiteAutoTranslateEnabled = () => shouldAutoTranslateSite(siteHostname, settings);
+    const applySiteAutoTranslateChange = async (previousEnabled) => {
+      const enabled = isSiteAutoTranslateEnabled();
+      if (enabled === previousEnabled) return;
+      if (enabled) await runPage();
+      else restore();
+    };
     const saveSettings = async (next) => {
+      const previousEnabled = isSiteAutoTranslateEnabled();
       settings = await settingsStore.save(next);
       controller.refreshDynamicObserver();
+      toolbar?.setSiteAutoTranslateEnabled(isSiteAutoTranslateEnabled());
+      await applySiteAutoTranslateChange(previousEnabled);
     };
     const showSettings = () => openSettings(dialog, t, settings, saveSettings);
     const openInput = () => popup.open();
+    const setSiteAutoTranslate = async (enabled) => {
+      const previousEnabled = isSiteAutoTranslateEnabled();
+      settings = await settingsStore.save({
+        ...settings,
+        siteAutoTranslatePreferences: { ...settings.siteAutoTranslatePreferences, [siteHostname]: enabled }
+      });
+      toolbar?.setSiteAutoTranslateEnabled(isSiteAutoTranslateEnabled());
+      toast.show(t(enabled ? "siteAutoTranslateEnabled" : "siteAutoTranslateDisabled"));
+      await applySiteAutoTranslateChange(previousEnabled);
+    };
     const runSelection = () => {
       const text = getSelectedText();
       if (!text) {
@@ -1754,13 +1815,15 @@
       translateVisible: runVisible,
       openInput,
       restore,
-      openSettings: showSettings
+      openSettings: showSettings,
+      onToggleSiteAutoTranslate: setSiteAutoTranslate
     }, {
       position: settings.toolbarPosition,
       mode: settings.toolbarMode,
       edgeRestoreMode: settings.toolbarEdgeRestoreMode,
       edgeCenterY: settings.toolbarEdgeCenterY,
       collapsed: settings.toolbarCollapsed,
+      autoTranslateForSite: isSiteAutoTranslateEnabled(),
       onStateChange: saveToolbarState
     });
     new SelectionTranslator(root, {
@@ -1775,7 +1838,7 @@
     api.registerMenuCommand(t("inputTranslate"), openInput);
     api.registerMenuCommand(t("restore"), restore);
     api.registerMenuCommand(t("settings"), showSettings);
-    if (settings.autoTranslate && !isAutoTranslateBlacklisted(location.hostname, settings.autoTranslateBlacklist)) {
+    if (isSiteAutoTranslateEnabled()) {
       await whenIdle();
       runPage();
     }

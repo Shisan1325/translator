@@ -2,7 +2,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sourceLanguage: 'auto',
   targetLanguage: 'zh-Hans',
   autoTranslate: false,
-  autoTranslateBlacklist: [],
+  siteAutoTranslatePreferences: {},
   translateDynamic: true,
   showSelectionButton: true,
   cacheEnabled: true,
@@ -28,7 +28,7 @@ export const LANGUAGE_OPTIONS = [
   ['ru', 'Русский'],
 ];
 
-function normalizeHostname(value) {
+export function normalizeHostname(value) {
   const input = String(value || '').trim().toLowerCase();
   if (!input) return '';
   try {
@@ -38,9 +38,20 @@ function normalizeHostname(value) {
   }
 }
 
-export function isAutoTranslateBlacklisted(hostname, blacklist = []) {
+export function getSiteAutoTranslatePreference(hostname, preferences = {}) {
   const current = normalizeHostname(hostname);
-  return Boolean(current && blacklist.some((entry) => current === entry || current.endsWith(`.${entry}`)));
+  if (!current || typeof preferences !== 'object') return undefined;
+  const segments = current.split('.');
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const preference = preferences[segments.slice(index).join('.')];
+    if (typeof preference === 'boolean') return preference;
+  }
+  return undefined;
+}
+
+export function shouldAutoTranslateSite(hostname, settings) {
+  const preference = getSiteAutoTranslatePreference(hostname, settings.siteAutoTranslatePreferences);
+  return preference === undefined ? settings.autoTranslate : preference;
 }
 
 export function normalizeSettings(value = {}) {
@@ -55,10 +66,23 @@ export function normalizeSettings(value = {}) {
   }
   settings.sourceLanguage = String(settings.sourceLanguage || 'auto');
   settings.targetLanguage = String(settings.targetLanguage || DEFAULT_SETTINGS.targetLanguage);
-  const rawBlacklist = Array.isArray(settings.autoTranslateBlacklist)
-    ? settings.autoTranslateBlacklist
-    : String(settings.autoTranslateBlacklist || '').split(/[\n,]/);
-  settings.autoTranslateBlacklist = [...new Set(rawBlacklist.map(normalizeHostname).filter(Boolean))].slice(0, 100);
+  const preferences = value.siteAutoTranslatePreferences && typeof value.siteAutoTranslatePreferences === 'object'
+    ? value.siteAutoTranslatePreferences
+    : {};
+  settings.siteAutoTranslatePreferences = {};
+  for (const [hostname, enabled] of Object.entries(preferences)) {
+    const normalizedHostname = normalizeHostname(hostname);
+    if (normalizedHostname && typeof enabled === 'boolean') settings.siteAutoTranslatePreferences[normalizedHostname] = enabled;
+  }
+  const legacyBlacklist = Array.isArray(value.autoTranslateBlacklist)
+    ? value.autoTranslateBlacklist
+    : String(value.autoTranslateBlacklist || '').split(/[\n,]/);
+  for (const hostname of legacyBlacklist) {
+    const normalizedHostname = normalizeHostname(hostname);
+    if (normalizedHostname && !(normalizedHostname in settings.siteAutoTranslatePreferences)) {
+      settings.siteAutoTranslatePreferences[normalizedHostname] = false;
+    }
+  }
   const validModes = new Set(['expanded', 'collapsed', 'edge-left', 'edge-right']);
   settings.toolbarMode = validModes.has(value.toolbarMode)
     ? value.toolbarMode

@@ -4,7 +4,7 @@ import { normalizeSettings } from '../src/config/defaults.js';
 
 const t = (key) => key;
 const actions = {
-  translatePage: () => {}, translateVisible: () => {}, openInput: () => {}, restore: () => {}, openSettings: () => {},
+  translatePage: () => {}, translateVisible: () => {}, openInput: () => {}, restore: () => {}, openSettings: () => {}, onToggleSiteAutoTranslate: () => {},
 };
 
 function useImmediateAnimationFrames() {
@@ -44,6 +44,23 @@ describe('Toolbar', () => {
       toolbarCollapsed: true,
     }));
     globalThis.requestAnimationFrame = original;
+    toolbar.destroy();
+    root.remove();
+  });
+
+  it('提供当前网站自动翻译开关，并同步按钮状态', () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    const onToggleSiteAutoTranslate = vi.fn();
+    const toolbar = new Toolbar(root, t, { ...actions, onToggleSiteAutoTranslate }, { autoTranslateForSite: false });
+
+    expect(toolbar.siteAutoButton.classList.contains('is-active')).toBe(false);
+    expect(toolbar.siteAutoButton.getAttribute('title')).toBe('siteAutoTranslateStatusDisabled');
+    toolbar.siteAutoButton.click();
+    expect(onToggleSiteAutoTranslate).toHaveBeenCalledWith(true);
+    expect(toolbar.siteAutoButton.classList.contains('is-active')).toBe(true);
+    expect(toolbar.siteAutoButton.getAttribute('title')).toBe('siteAutoTranslateStatusEnabled');
+    expect(toolbar.siteAutoButton.getAttribute('aria-label')).toBe('disableAutoTranslateForSite');
     toolbar.destroy();
     root.remove();
   });
