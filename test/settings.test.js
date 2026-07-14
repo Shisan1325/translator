@@ -43,4 +43,12 @@ describe('设置页', () => {
     expect(shouldAutoTranslateSite('docs.example.org', settings)).toBe(true);
     expect(shouldAutoTranslateSite('unconfigured.example', settings)).toBe(true);
   });
+
+  it('损坏设置会回退默认值，并支持单段主机名偏好', () => {
+    expect(normalizeSettings(null)).toEqual(DEFAULT_SETTINGS);
+    expect(normalizeSettings('invalid')).toEqual(DEFAULT_SETTINGS);
+    expect(normalizeSettings(42)).toEqual(DEFAULT_SETTINGS);
+    expect(getSiteAutoTranslatePreference('localhost', { localhost: true })).toBe(true);
+    expect(getSiteAutoTranslatePreference('127.0.0.1', { '127.0.0.1': false })).toBe(false);
+  });
 });

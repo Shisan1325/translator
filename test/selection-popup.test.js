@@ -78,4 +78,48 @@ describe('TranslationInputPopup', () => {
     expect(root.querySelector('.tr-overlay')).toBeNull();
     root.remove();
   });
+
+  it('旧会话完成不会解除新会话的翻译锁', async () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    const resolvers = new Map();
+    const translate = vi.fn((text) => new Promise((resolve) => resolvers.set(text, resolve)));
+    const popup = new TranslationInputPopup(root, t, { show: () => {} }, {
+      getSettings: () => ({ sourceLanguage: 'auto', targetLanguage: 'zh-Hans' }), translate,
+    });
+
+    popup.open({ text: 'first' });
+    const first = popup.run();
+    popup.close();
+    popup.open({ text: 'second' });
+    const second = popup.run();
+    resolvers.get('first')('第一个译文');
+    await Promise.resolve();
+    await Promise.resolve();
+    popup.run();
+    expect(translate).toHaveBeenCalledTimes(2);
+    resolvers.get('second')('第二个译文');
+    await Promise.all([first, second]);
+    popup.close();
+    root.remove();
+  });
+
+  it('翻译失败时显示具体错误提示', async () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    const toast = { show: vi.fn() };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const popup = new TranslationInputPopup(root, t, toast, {
+      getSettings: () => ({ sourceLanguage: 'auto', targetLanguage: 'zh-Hans' }),
+      translate: vi.fn().mockRejectedValue(new Error('微软翻译请求失败（HTTP 429）')),
+    });
+
+    popup.open({ text: 'hello' });
+    await popup.run();
+
+    expect(toast.show).toHaveBeenCalledWith('error', { duration: 8_000 });
+    popup.close();
+    consoleError.mockRestore();
+    root.remove();
+  });
 });

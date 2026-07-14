@@ -26,4 +26,18 @@ describe('TextReplacer', () => {
     expect(replacer.restoreAll()).toBe(0);
     expect(node.nodeValue).toBe('网站更新');
   });
+
+  it('移除动态节点后可以释放翻译记录', () => {
+    document.body.replaceChildren();
+    const container = document.createElement('div');
+    const node = document.createTextNode('Hello');
+    container.append(node);
+    document.body.append(container);
+    const replacer = new TextReplacer();
+    replacer.apply(node, '你好');
+    container.remove();
+
+    replacer.pruneDisconnected();
+    expect(replacer.nodes.size).toBe(0);
+  });
 });

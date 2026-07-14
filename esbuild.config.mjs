@@ -1,12 +1,18 @@
 import { build, context } from 'esbuild';
+import { readFile } from 'node:fs/promises';
+
+const { version } = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
 
 const metadata = `// ==UserScript==
 // @name         网页翻译助手 MVP
 // @namespace    https://github.com/local/translator-userscript
-// @version      0.1.3
+// @version      ${version}
 // @description  高性能、模块化的网页与划词翻译工具
 // @author       MiaViaU
 // @license      MIT
+// @homepageURL   https://github.com/MiaViaU/translator
+// @downloadURL   https://raw.githubusercontent.com/MiaViaU/translator/master/dist/translator.user.js
+// @updateURL     https://raw.githubusercontent.com/MiaViaU/translator/master/dist/translator.user.js
 // @match        *://*/*
 // @grant        GM.xmlHttpRequest
 // @grant        GM.getValue

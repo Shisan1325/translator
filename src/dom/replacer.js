@@ -18,6 +18,27 @@ export class TextReplacer {
     return Boolean(record && node.nodeValue === record.translated);
   }
 
+  forget(node) {
+    this.records.delete(node);
+    this.nodes.delete(node);
+  }
+
+  forgetTree(root) {
+    if (root?.nodeType === 3) {
+      this.forget(root);
+      return;
+    }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) this.forget(node);
+  }
+
+  pruneDisconnected() {
+    for (const node of this.nodes) {
+      if (!node.isConnected) this.forget(node);
+    }
+  }
+
   apply(node, translated) {
     const original = this.sourceFor(node);
     if (typeof original !== 'string' || node.nodeValue !== original && !this.records.has(node)) return false;
@@ -32,16 +53,14 @@ export class TextReplacer {
     for (const node of this.nodes) {
       const record = this.records.get(node);
       if (!record || !node.isConnected) {
-        this.records.delete(node);
-        this.nodes.delete(node);
+        this.forget(node);
         continue;
       }
       if (node.nodeValue === record.translated) {
         node.nodeValue = record.original;
         restored += 1;
       }
-      this.records.delete(node);
-      this.nodes.delete(node);
+      this.forget(node);
     }
     return restored;
   }

@@ -5,6 +5,7 @@ import { createGmApi } from './utils/gm.js';
 import { whenIdle } from './utils/idle.js';
 import { SettingsStore } from './utils/storage.js';
 import { MicrosoftProvider } from './translator/microsoft.js';
+import { ProviderError } from './translator/provider.js';
 import { TranslationController } from './translator/controller.js';
 import { createUiRoot } from './ui/root.js';
 import { Toolbar } from './ui/toolbar.js';
@@ -12,6 +13,26 @@ import { Toast } from './ui/toast.js';
 import { Dialog, openSettings } from './ui/dialog.js';
 import { TranslationInputPopup } from './selection/popup.js';
 import { getSelectedText, SelectionTranslator } from './selection/selection.js';
+
+function mergeSettingsForm(current, next) {
+  return {
+    ...current,
+    sourceLanguage: next.sourceLanguage,
+    targetLanguage: next.targetLanguage,
+    autoTranslate: next.autoTranslate,
+    translateDynamic: next.translateDynamic,
+    showSelectionButton: next.showSelectionButton,
+    cacheEnabled: next.cacheEnabled,
+    batchSize: next.batchSize,
+    timeoutMs: next.timeoutMs,
+  };
+}
+
+function formatTranslationError(error) {
+  if (error instanceof ProviderError) return error.message;
+  if (error instanceof Error && error.message) return error.message;
+  return '未知错误';
+}
 
 async function bootstrap() {
   // MVP 不处理 iframe 内容；此保护可避免子框架中重复初始化整套 UI。
@@ -31,7 +52,10 @@ async function bootstrap() {
     cache: new MemoryTranslationCache(),
     getSettings: () => settings,
     onProgress: (count) => toast.show(t('translated', { count })),
-    onError: (error) => console.error('[translator-userscript]', error),
+    onError: (error) => {
+      console.error('[translator-userscript]', error);
+      toast.show(t('error', { message: formatTranslationError(error) }), { duration: 8_000 });
+    },
   });
   const popup = new TranslationInputPopup(root, t, toast, {
     getSettings: () => settings,
@@ -44,6 +68,7 @@ async function bootstrap() {
       await controller.translatePage();
     } catch (error) {
       console.error('[translator-userscript]', error);
+      toast.show(t('error', { message: formatTranslationError(error) }), { duration: 8_000 });
     }
   };
   const runVisible = async () => {
@@ -52,6 +77,7 @@ async function bootstrap() {
       await controller.translateVisible();
     } catch (error) {
       console.error('[translator-userscript]', error);
+      toast.show(t('error', { message: formatTranslationError(error) }), { duration: 8_000 });
     }
   };
   const restore = () => {
@@ -60,30 +86,39 @@ async function bootstrap() {
   };
   const siteHostname = normalizeHostname(location.hostname);
   const isSiteAutoTranslateEnabled = () => shouldAutoTranslateSite(siteHostname, settings);
-  const applySiteAutoTranslateChange = async (previousEnabled) => {
-    const enabled = isSiteAutoTranslateEnabled();
+  const applySiteAutoTranslateChange = async (previousEnabled, enabled) => {
     if (enabled === previousEnabled) return;
     if (enabled) await runPage();
     else restore();
   };
   const saveSettings = async (next) => {
-    const previousEnabled = isSiteAutoTranslateEnabled();
-    settings = await settingsStore.save(next);
+    let previousEnabled;
+    const saved = await settingsStore.update((current) => {
+      previousEnabled = shouldAutoTranslateSite(siteHostname, current);
+      return mergeSettingsForm(current, next);
+    });
+    settings = saved;
+    const enabled = isSiteAutoTranslateEnabled();
     controller.refreshDynamicObserver();
-    toolbar?.setSiteAutoTranslateEnabled(isSiteAutoTranslateEnabled());
-    await applySiteAutoTranslateChange(previousEnabled);
+    toolbar?.setSiteAutoTranslateEnabled(enabled);
+    await applySiteAutoTranslateChange(previousEnabled, enabled);
   };
   const showSettings = () => openSettings(dialog, t, settings, saveSettings);
   const openInput = () => popup.open();
   const setSiteAutoTranslate = async (enabled) => {
-    const previousEnabled = isSiteAutoTranslateEnabled();
-    settings = await settingsStore.save({
-      ...settings,
-      siteAutoTranslatePreferences: { ...settings.siteAutoTranslatePreferences, [siteHostname]: enabled },
+    let previousEnabled;
+    const saved = await settingsStore.update((current) => {
+      previousEnabled = shouldAutoTranslateSite(siteHostname, current);
+      return {
+        ...current,
+        siteAutoTranslatePreferences: { ...current.siteAutoTranslatePreferences, [siteHostname]: enabled },
+      };
     });
-    toolbar?.setSiteAutoTranslateEnabled(isSiteAutoTranslateEnabled());
+    settings = saved;
+    const isEnabled = isSiteAutoTranslateEnabled();
+    toolbar?.setSiteAutoTranslateEnabled(isEnabled);
     toast.show(t(enabled ? 'siteAutoTranslateEnabled' : 'siteAutoTranslateDisabled'));
-    await applySiteAutoTranslateChange(previousEnabled);
+    await applySiteAutoTranslateChange(previousEnabled, isEnabled);
   };
   const runSelection = () => {
     const text = getSelectedText();
@@ -94,8 +129,7 @@ async function bootstrap() {
     popup.open({ text, autoTranslate: true });
   };
   const saveToolbarState = (patch) => {
-    const next = { ...settings, ...patch };
-    return settingsStore.save(next).then((saved) => {
+    return settingsStore.update((current) => ({ ...current, ...patch })).then((saved) => {
       settings = saved;
       return saved;
     });

@@ -53,7 +53,11 @@ export class Toolbar {
     this.edgeRestoreMode = [TOOLBAR_MODE.EXPANDED, TOOLBAR_MODE.COLLAPSED].includes(edgeRestoreMode)
       ? edgeRestoreMode
       : TOOLBAR_MODE.EXPANDED;
-    this.edgeCenterY = Number.isFinite(Number(edgeCenterY)) ? Number(edgeCenterY) : null;
+    this.edgeCenterY = edgeCenterY !== null
+      && edgeCenterY !== ''
+      && Number.isFinite(Number(edgeCenterY))
+      ? Number(edgeCenterY)
+      : null;
     this.preferredPosition = position;
     this.autoTranslateForSite = Boolean(autoTranslateForSite);
     this.onToggleSiteAutoTranslate = actions.onToggleSiteAutoTranslate || (() => {});
@@ -110,19 +114,17 @@ export class Toolbar {
 
   restoreFromEdge() {
     const edge = this.mode;
-    const centerY = this.edgeCenterY ?? (this.currentPosition.top + this.bar.offsetHeight / 2);
+    const centerY = this.edgeCenterY ?? ((this.currentPosition?.top ?? EDGE_GAP) + this.bar.offsetHeight / 2);
     this.mode = this.edgeRestoreMode;
     this.edgeCenterY = null;
     this.renderMode();
-    requestAnimationFrame(() => {
-      const width = this.bar.offsetWidth;
-      this.preferredPosition = {
-        left: edge === TOOLBAR_MODE.EDGE_LEFT ? EDGE_GAP : viewportWidth() - width - EDGE_GAP,
-        top: centerY - this.bar.offsetHeight / 2,
-      };
-      this.place();
-      this.persist();
-    });
+    const width = this.bar.offsetWidth;
+    this.preferredPosition = {
+      left: edge === TOOLBAR_MODE.EDGE_LEFT ? EDGE_GAP : viewportWidth() - width - EDGE_GAP,
+      top: centerY - this.bar.offsetHeight / 2,
+    };
+    this.place();
+    this.persist();
   }
 
   setMode(mode, persist = true) {
@@ -131,17 +133,15 @@ export class Toolbar {
       : null;
     this.mode = normalizeMode(mode);
     this.renderMode();
+    if (previous) {
+      const isLeftAnchored = previous.left + previous.width / 2 < viewportWidth() / 2;
+      this.preferredPosition = {
+        left: isLeftAnchored ? previous.left : previous.left + previous.width - this.bar.offsetWidth,
+        top: previous.top,
+      };
+    }
+    this.place();
     if (persist) this.persist();
-    requestAnimationFrame(() => {
-      if (previous) {
-        const isLeftAnchored = previous.left + previous.width / 2 < viewportWidth() / 2;
-        this.preferredPosition = {
-          left: isLeftAnchored ? previous.left : previous.left + previous.width - this.bar.offsetWidth,
-          top: previous.top,
-        };
-      }
-      this.place();
-    });
   }
 
   renderMode() {
@@ -199,11 +199,15 @@ export class Toolbar {
   startDrag(event) {
     if (event.button !== 0) return;
     event.preventDefault();
+    this.stopDragging?.();
+    const pointerId = Number.isInteger(event.pointerId) ? event.pointerId : null;
+    if (pointerId !== null) this.dragHandle.setPointerCapture?.(pointerId);
     const rect = this.bar.getBoundingClientRect();
     const origin = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
     const dragStartMode = this.isEdgeHidden ? TOOLBAR_MODE.COLLAPSED : this.mode;
     let moved = false;
     const move = (nextEvent) => {
+      if (pointerId !== null && nextEvent.pointerId !== undefined && nextEvent.pointerId !== pointerId) return;
       const deltaX = nextEvent.clientX - origin.x;
       const deltaY = nextEvent.clientY - origin.y;
       if (!moved && Math.hypot(deltaX, deltaY) < 4) return;
@@ -211,9 +215,15 @@ export class Toolbar {
       this.bar.classList.add('is-dragging');
       this.place({ left: origin.left + deltaX, top: origin.top + deltaY });
     };
-    const end = () => {
+    const end = (nextEvent) => {
+      if (pointerId !== null && nextEvent?.pointerId !== undefined && nextEvent.pointerId !== pointerId) return;
       document.removeEventListener('pointermove', move, true);
       document.removeEventListener('pointerup', end, true);
+      document.removeEventListener('pointercancel', end, true);
+      if (pointerId !== null && this.dragHandle.hasPointerCapture?.(pointerId)) {
+        this.dragHandle.releasePointerCapture(pointerId);
+      }
+      this.stopDragging = null;
       this.bar.classList.remove('is-dragging');
       if (!moved) return;
       const nextMode = this.snapMode(this.currentPosition, dragStartMode);
@@ -228,8 +238,10 @@ export class Toolbar {
       this.place();
       this.persist();
     };
+    this.stopDragging = () => end();
     document.addEventListener('pointermove', move, true);
     document.addEventListener('pointerup', end, true);
+    document.addEventListener('pointercancel', end, true);
   }
 
   persist() {
@@ -243,6 +255,7 @@ export class Toolbar {
   }
 
   destroy() {
+    this.stopDragging?.();
     window.removeEventListener('resize', this.onResize);
     window.visualViewport?.removeEventListener('resize', this.onResize);
     cancelAnimationFrame(this.resizeFrame);

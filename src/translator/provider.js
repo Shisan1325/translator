@@ -1,8 +1,19 @@
 export class ProviderError extends Error {
-  constructor(message, { status = 0, cause } = {}) {
+  constructor(message, {
+    status = 0,
+    code = '',
+    serviceMessage = '',
+    retryAfterMs = null,
+    responseText = '',
+    cause,
+  } = {}) {
     super(message, { cause });
     this.name = 'ProviderError';
-    this.status = status;
+    this.status = Number.isFinite(Number(status)) ? Number(status) : 0;
+    this.code = code ? String(code) : '';
+    this.serviceMessage = serviceMessage ? String(serviceMessage) : '';
+    this.retryAfterMs = Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? retryAfterMs : null;
+    this.responseText = responseText ? String(responseText) : '';
   }
 
   get isAuthorizationError() {
@@ -10,7 +21,7 @@ export class ProviderError extends Error {
   }
 
   get isRetryable() {
-    return this.status === 0 || this.status >= 500;
+    return this.status === 0 || this.status === 408 || this.status === 429 || this.status >= 500;
   }
 }
 

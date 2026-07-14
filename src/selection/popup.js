@@ -33,10 +33,12 @@ export class TranslationInputPopup {
     this.toast = toast;
     this.getSettings = getSettings;
     this.translate = translate;
+    this.session = 0;
   }
 
   open({ text = '', autoTranslate = false } = {}) {
     this.close();
+    this.session += 1;
     const settings = this.getSettings();
     this.source = languageSelect(this.t('sourceLanguage'), settings.sourceLanguage, true);
     this.target = languageSelect(this.t('targetLanguage'), settings.targetLanguage, false);
@@ -93,6 +95,7 @@ export class TranslationInputPopup {
       return;
     }
     if (this.busy) return;
+    const session = this.session;
     this.busy = true;
     translateButton.disabled = true;
     translateButton.textContent = '…';
@@ -101,18 +104,20 @@ export class TranslationInputPopup {
     this.copyButton.disabled = true;
     try {
       const translation = await this.translate(text, { sourceLanguage: source.value, targetLanguage: target.value });
-      if (this.result !== result) return;
+      if (this.session !== session || this.result !== result) return;
       result.textContent = translation;
       result.dataset.state = 'translated';
       this.copyButton.disabled = false;
     } catch (error) {
-      if (this.result === result) {
+      if (this.session === session && this.result === result) {
         result.textContent = this.t('translationPlaceholder');
         result.dataset.state = 'placeholder';
         if (this.copyButton) this.copyButton.disabled = true;
+        this.toast.show(this.t('error', { message: error instanceof Error ? error.message : String(error) }), { duration: 8_000 });
       }
       console.error('[translator-userscript]', error);
     } finally {
+      if (this.session !== session) return;
       this.busy = false;
       if (this.translateButton === translateButton) {
         translateButton.disabled = false;
@@ -140,6 +145,7 @@ export class TranslationInputPopup {
   }
 
   close() {
+    this.session += 1;
     this.source?.destroy();
     this.target?.destroy();
     this.source = null;

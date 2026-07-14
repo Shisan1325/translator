@@ -6,7 +6,7 @@ const SKIPPED_TAGS = new Set([
 ]);
 const CODE_TAGS = new Set(['CODE', 'PRE', 'KBD', 'SAMP', 'TT']);
 const SKIPPED_SELECTOR = [
-  '[translate="no"]', '.notranslate', '.imt-notranslate', '[data-no-translate]', '[contenteditable="true"]', '[aria-hidden="true"]',
+  '[translate="no"]', '.notranslate', '.imt-notranslate', '[data-no-translate]', '[aria-hidden="true"]',
   '.material-icons', 'material-icon', 'i.fa', 'i[class^="fa-"]', '.google-symbols', 'span[class^="material-symbols-"]', '.visuallyhidden',
   '.prism-code', '.enlighter-code', '.rc-CodeBlock', '.highlight', '[role="code"]', 'table.highlight', 'div[class^="codeBlockContent"]',
   'div[class^="codeBlockLines"]', 'div[class^="token-line"]', '[data-test="json-editor"]', '.jp-CodeMirrorEditor', 'cds-code-snippet',
@@ -18,9 +18,13 @@ const NON_TEXTUAL_CONTENT = /^(?:[\d\s\p{P}\p{S}]+|copyright\b.*)$/iu;
 
 function isInsideSkippedElement(element) {
   if (!element) return true;
-  if (element.closest('[data-translator-ui], [hidden], [contenteditable="true"]')) return true;
-  if (element.closest(SKIPPED_SELECTOR)) return true;
+  if (element.closest('[data-translator-ui], [hidden]')) return true;
+  const skippedContainer = element.closest(SKIPPED_SELECTOR);
+  if (skippedContainer && skippedContainer !== document.documentElement) return true;
   for (let current = element; current; current = current.parentElement) {
+    const editable = current.getAttribute?.('contenteditable');
+    if (editable !== null && editable.toLowerCase() !== 'false') return true;
+    if (current.isContentEditable === true) return true;
     if (SKIPPED_TAGS.has(current.tagName)) return true;
     if (CODE_TAGS.has(current.tagName)) return true;
     const style = getComputedStyle(current);
@@ -40,6 +44,7 @@ export function isTranslatableTextNode(node) {
 export function isTextNodeVisible(node) {
   const range = document.createRange();
   range.selectNodeContents(node);
+  if (typeof range.getBoundingClientRect !== 'function') return false;
   const rect = range.getBoundingClientRect();
   if (!rect || (rect.width === 0 && rect.height === 0)) return false;
   return rect.bottom >= 0 && rect.right >= 0 && rect.top <= window.innerHeight && rect.left <= window.innerWidth;

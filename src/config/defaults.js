@@ -42,7 +42,7 @@ export function getSiteAutoTranslatePreference(hostname, preferences = {}) {
   const current = normalizeHostname(hostname);
   if (!current || typeof preferences !== 'object') return undefined;
   const segments = current.split('.');
-  for (let index = 0; index < segments.length - 1; index += 1) {
+  for (let index = 0; index < segments.length; index += 1) {
     const preference = preferences[segments.slice(index).join('.')];
     if (typeof preference === 'boolean') return preference;
   }
@@ -55,6 +55,7 @@ export function shouldAutoTranslateSite(hostname, settings) {
 }
 
 export function normalizeSettings(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) value = {};
   const settings = { ...DEFAULT_SETTINGS };
   for (const key of Object.keys(DEFAULT_SETTINGS)) {
     if (key in value) settings[key] = value[key];
@@ -93,7 +94,9 @@ export function normalizeSettings(value = {}) {
   settings.toolbarEdgeRestoreMode = ['expanded', 'collapsed'].includes(settings.toolbarEdgeRestoreMode)
     ? settings.toolbarEdgeRestoreMode
     : 'expanded';
-  settings.toolbarEdgeCenterY = Number.isFinite(Number(settings.toolbarEdgeCenterY))
+  settings.toolbarEdgeCenterY = settings.toolbarEdgeCenterY !== null
+    && settings.toolbarEdgeCenterY !== ''
+    && Number.isFinite(Number(settings.toolbarEdgeCenterY))
     ? Number(settings.toolbarEdgeCenterY)
     : null;
   if (settings.toolbarPosition && Number.isFinite(Number(settings.toolbarPosition.left)) && Number.isFinite(Number(settings.toolbarPosition.top))) {

@@ -11,9 +11,11 @@ export class TranslationController {
     this.onError = onError;
     this.replacer = new TextReplacer();
     this.queue = Promise.resolve();
+    this.dynamicRoots = new Set();
+    this.dynamicTask = null;
     this.enabled = false;
     this.generation = 0;
-    this.observer = new IncrementalObserver((roots) => this.translateDynamicRoots(roots));
+    this.observer = new IncrementalObserver((roots, removedRoots) => this.translateDynamicRoots(roots, removedRoots));
   }
 
   async translatePage() {
@@ -24,7 +26,10 @@ export class TranslationController {
   }
 
   async translateVisible() {
-    return this.translateRoot(document.body, { visibleOnly: true, generation: ++this.generation });
+    const generation = ++this.generation;
+    this.enabled = true;
+    if (this.getSettings().translateDynamic) this.observer.start(document.body);
+    return this.translateRoot(document.body, { visibleOnly: true, generation });
   }
 
   async translateRoot(root, { visibleOnly, generation }) {
@@ -112,30 +117,80 @@ export class TranslationController {
     return translated;
   }
 
-  translateDynamicRoots(roots) {
-    if (!this.enabled || !this.getSettings().translateDynamic) return;
-    const generation = this.generation;
-    for (const root of roots) {
-      if (root.nodeType === Node.TEXT_NODE && this.replacer.isOwnTranslation(root)) continue;
-      this.queue = this.queue.then(async () => {
-        if (generation !== this.generation) return;
-        const nodes = [];
-        await scanTextNodesInIdle(root, this.getSettings(), { onChunk: async (chunk) => nodes.push(...chunk) });
-        if (generation === this.generation) await this.translateNodes(nodes, generation);
-      }).catch(this.onError);
+  translateDynamicRoots(roots, removedRoots = []) {
+    for (const root of removedRoots) {
+      if (!root.isConnected) this.replacer.forgetTree(root);
     }
+    this.replacer.pruneDisconnected();
+    if (!this.enabled || !this.getSettings().translateDynamic) return;
+    for (const root of roots) {
+      if (!root || (root.nodeType === Node.TEXT_NODE && this.replacer.isOwnTranslation(root))) continue;
+      this.dynamicRoots.add(root);
+    }
+    if (!this.dynamicRoots.size) {
+      this.replacer.pruneDisconnected();
+      return;
+    }
+    return this.scheduleDynamicTranslation();
+  }
+
+  scheduleDynamicTranslation() {
+    if (this.dynamicTask) return this.dynamicTask;
+    const task = this.queue.then(async () => {
+      const generation = this.generation;
+      if (!this.enabled || !this.getSettings().translateDynamic) return 0;
+      const pendingRoots = this.compactDynamicRoots([...this.dynamicRoots]);
+      this.dynamicRoots.clear();
+      if (generation !== this.generation) return 0;
+      const nodes = [];
+      for (const root of pendingRoots) {
+        if (root.nodeType !== Node.TEXT_NODE && !root.isConnected) continue;
+        await scanTextNodesInIdle(root, this.getSettings(), {
+          onChunk: async (chunk) => nodes.push(...chunk.filter((node) => !this.replacer.isOwnTranslation(node))),
+        });
+      }
+      if (generation !== this.generation) return 0;
+      const translated = await this.translateNodes(nodes, generation);
+      this.replacer.pruneDisconnected();
+      return translated;
+    });
+    this.dynamicTask = task;
+    this.queue = task.catch((error) => {
+      this.onError(error);
+      return 0;
+    });
+    task.then(
+      () => this.finishDynamicTranslation(),
+      () => this.finishDynamicTranslation(),
+    );
+    return task;
+  }
+
+  finishDynamicTranslation() {
+    this.dynamicTask = null;
+    if (this.enabled && this.getSettings().translateDynamic && this.dynamicRoots.size) this.scheduleDynamicTranslation();
+  }
+
+  compactDynamicRoots(roots) {
+    return roots.filter((root) => !roots.some((other) => other !== root && other.contains?.(root)));
   }
 
   restore() {
     this.generation += 1;
     this.enabled = false;
+    this.dynamicRoots.clear();
     this.observer.stop();
     return this.replacer.restoreAll();
   }
 
   refreshDynamicObserver() {
     if (!this.enabled) return;
-    if (this.getSettings().translateDynamic) this.observer.start(document.body);
-    else this.observer.stop();
+    if (this.getSettings().translateDynamic) {
+      if (!this.observer.observer) this.observer.start(document.body);
+    }
+    else {
+      this.dynamicRoots.clear();
+      this.observer.stop();
+    }
   }
 }

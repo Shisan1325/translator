@@ -29,7 +29,18 @@ export function createGmApi(scope = globalThis) {
       return undefined;
     },
     request(details) {
-      if (modern?.xmlHttpRequest) return Promise.resolve(modern.xmlHttpRequest(details));
+      if (modern?.xmlHttpRequest) {
+        return new Promise((resolve, reject) => {
+          const request = modern.xmlHttpRequest({
+            ...details,
+            onload: resolve,
+            onerror: (error) => reject(Object.assign(new Error('网络请求失败'), { response: error, status: error?.status || 0 })),
+            ontimeout: (error) => reject(Object.assign(new Error('请求超时'), { response: error, status: error?.status || 0 })),
+            onabort: (error) => reject(Object.assign(new Error('请求已取消'), { response: error, status: error?.status || 0 })),
+          });
+          if (request && typeof request.then === 'function') request.then(resolve, reject);
+        });
+      }
       if (typeof scope.GM_xmlhttpRequest === 'function') return asPromise(scope.GM_xmlhttpRequest, details);
       return Promise.reject(new Error('当前脚本管理器不支持跨域请求'));
     },

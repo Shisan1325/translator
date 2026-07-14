@@ -121,6 +121,57 @@ describe('Toolbar', () => {
     root.remove();
   });
 
+  it('指针取消时仍会保存已完成的贴边拖动', () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    const onStateChange = vi.fn();
+    const restoreAnimationFrames = useImmediateAnimationFrames();
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 });
+    const toolbar = new Toolbar(root, t, actions, { position: { left: 680, top: 120 }, collapsed: true, onStateChange });
+    Object.defineProperty(toolbar.bar, 'offsetWidth', { configurable: true, get: () => 70 });
+    Object.defineProperty(toolbar.bar, 'offsetHeight', { configurable: true, get: () => 46 });
+    toolbar.bar.getBoundingClientRect = () => ({ left: 680, top: 120, width: 70, height: 46 });
+
+    toolbar.dragHandle.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 690, clientY: 130, bubbles: true }));
+    document.dispatchEvent(new MouseEvent('pointermove', { clientX: 795, clientY: 130 }));
+    document.dispatchEvent(new MouseEvent('pointercancel', { clientX: 795, clientY: 130 }));
+
+    expect(toolbar.mode).toBe(TOOLBAR_MODE.EDGE_RIGHT);
+    expect(onStateChange).toHaveBeenCalledWith(expect.objectContaining({ toolbarMode: TOOLBAR_MODE.EDGE_RIGHT }));
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth });
+    restoreAnimationFrames();
+    toolbar.destroy();
+    root.remove();
+  });
+
+  it('从贴边状态恢复时不等待下一帧也会持久化', () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    const onStateChange = vi.fn();
+    const original = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = vi.fn(() => 1);
+    const toolbar = new Toolbar(root, t, actions, {
+      mode: TOOLBAR_MODE.EDGE_RIGHT,
+      edgeRestoreMode: TOOLBAR_MODE.COLLAPSED,
+      edgeCenterY: 140,
+      onStateChange,
+    });
+    Object.defineProperty(toolbar.bar, 'offsetWidth', { configurable: true, get: () => 70 });
+    Object.defineProperty(toolbar.bar, 'offsetHeight', { configurable: true, get: () => 46 });
+
+    toolbar.collapseButton.click();
+
+    expect(toolbar.mode).toBe(TOOLBAR_MODE.COLLAPSED);
+    expect(onStateChange).toHaveBeenCalledWith(expect.objectContaining({
+      toolbarMode: TOOLBAR_MODE.COLLAPSED,
+      toolbarEdgeCenterY: null,
+    }));
+    globalThis.requestAnimationFrame = original;
+    toolbar.destroy();
+    root.remove();
+  });
+
   it('拖动展开工具栏时保持展开，只有吸附到边缘才变为贴边标签', () => {
     const root = document.createElement('div');
     document.body.append(root);

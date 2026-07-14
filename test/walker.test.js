@@ -60,4 +60,40 @@ describe('文本节点遍历', () => {
       ', calling the film a "competent but pointless remake" in his review.',
     ]);
   });
+
+  it('忽略文档根节点的全局禁译标记，但保留局部禁译标记', () => {
+    document.body.replaceChildren();
+    document.documentElement.setAttribute('translate', 'no');
+    const readable = document.createElement('p');
+    readable.textContent = 'Translate this content';
+    const protectedText = document.createElement('span');
+    protectedText.setAttribute('translate', 'no');
+    protectedText.textContent = 'Do not translate this brand';
+    document.body.append(readable, protectedText);
+
+    try {
+      expect(collectTextNodes(document.body).map((node) => node.nodeValue.trim())).toEqual(['Translate this content']);
+    } finally {
+      document.documentElement.removeAttribute('translate');
+    }
+  });
+
+  it('跳过所有可编辑区域，包括 plaintext-only、空属性和继承状态', () => {
+    document.body.replaceChildren();
+    const readable = document.createElement('p');
+    readable.textContent = 'Readable content';
+    const plaintext = document.createElement('div');
+    plaintext.setAttribute('contenteditable', 'plaintext-only');
+    plaintext.textContent = 'Plaintext draft';
+    const empty = document.createElement('div');
+    empty.setAttribute('contenteditable', '');
+    empty.textContent = 'Empty draft';
+    const inherited = document.createElement('div');
+    inherited.setAttribute('contenteditable', 'true');
+    inherited.append(document.createElement('span'));
+    inherited.lastChild.textContent = 'Inherited draft';
+    document.body.append(readable, plaintext, empty, inherited);
+
+    expect(collectTextNodes(document.body).map((node) => node.nodeValue.trim())).toEqual(['Readable content']);
+  });
 });

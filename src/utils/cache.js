@@ -1,6 +1,7 @@
 export class MemoryTranslationCache {
-  constructor() {
+  constructor(maxEntries = 2_000) {
     this.entries = new Map();
+    this.maxEntries = maxEntries;
   }
 
   key({ sourceLanguage, targetLanguage, text }) {
@@ -8,11 +9,19 @@ export class MemoryTranslationCache {
   }
 
   get(input) {
-    return this.entries.get(this.key(input));
+    const key = this.key(input);
+    const value = this.entries.get(key);
+    if (value === undefined) return undefined;
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    return value;
   }
 
   set(input, value) {
-    this.entries.set(this.key(input), value);
+    const key = this.key(input);
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    while (this.entries.size > this.maxEntries) this.entries.delete(this.entries.keys().next().value);
   }
 
   clear() {

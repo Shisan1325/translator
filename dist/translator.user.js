@@ -1,10 +1,13 @@
 // ==UserScript==
 // @name         网页翻译助手 MVP
 // @namespace    https://github.com/local/translator-userscript
-// @version      0.1.3
+// @version      0.2.0
 // @description  高性能、模块化的网页与划词翻译工具
 // @author       MiaViaU
 // @license      MIT
+// @homepageURL   https://github.com/MiaViaU/translator
+// @downloadURL   https://raw.githubusercontent.com/MiaViaU/translator/master/dist/translator.user.js
+// @updateURL     https://raw.githubusercontent.com/MiaViaU/translator/master/dist/translator.user.js
 // @match        *://*/*
 // @grant        GM.xmlHttpRequest
 // @grant        GM.getValue
@@ -168,7 +171,7 @@
     const current = normalizeHostname(hostname);
     if (!current || typeof preferences !== "object") return void 0;
     const segments = current.split(".");
-    for (let index = 0; index < segments.length - 1; index += 1) {
+    for (let index = 0; index < segments.length; index += 1) {
       const preference = preferences[segments.slice(index).join(".")];
       if (typeof preference === "boolean") return preference;
     }
@@ -179,6 +182,7 @@
     return preference === void 0 ? settings.autoTranslate : preference;
   }
   function normalizeSettings(value = {}) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) value = {};
     const settings = { ...DEFAULT_SETTINGS };
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
       if (key in value) settings[key] = value[key];
@@ -207,7 +211,7 @@
     settings.toolbarMode = validModes.has(value.toolbarMode) ? value.toolbarMode : value.toolbarHidden || value.toolbarEdgeHiddenV2 ? "collapsed" : settings.toolbarCollapsed ? "collapsed" : "expanded";
     settings.toolbarCollapsed = settings.toolbarMode === "collapsed";
     settings.toolbarEdgeRestoreMode = ["expanded", "collapsed"].includes(settings.toolbarEdgeRestoreMode) ? settings.toolbarEdgeRestoreMode : "expanded";
-    settings.toolbarEdgeCenterY = Number.isFinite(Number(settings.toolbarEdgeCenterY)) ? Number(settings.toolbarEdgeCenterY) : null;
+    settings.toolbarEdgeCenterY = settings.toolbarEdgeCenterY !== null && settings.toolbarEdgeCenterY !== "" && Number.isFinite(Number(settings.toolbarEdgeCenterY)) ? Number(settings.toolbarEdgeCenterY) : null;
     if (settings.toolbarPosition && Number.isFinite(Number(settings.toolbarPosition.left)) && Number.isFinite(Number(settings.toolbarPosition.top))) {
       settings.toolbarPosition = { left: Number(settings.toolbarPosition.left), top: Number(settings.toolbarPosition.top) };
     } else {
@@ -218,17 +222,26 @@
 
   // src/utils/cache.js
   var MemoryTranslationCache = class {
-    constructor() {
+    constructor(maxEntries = 2e3) {
       this.entries = /* @__PURE__ */ new Map();
+      this.maxEntries = maxEntries;
     }
     key({ sourceLanguage, targetLanguage, text }) {
       return JSON.stringify([sourceLanguage, targetLanguage, text]);
     }
     get(input) {
-      return this.entries.get(this.key(input));
+      const key = this.key(input);
+      const value = this.entries.get(key);
+      if (value === void 0) return void 0;
+      this.entries.delete(key);
+      this.entries.set(key, value);
+      return value;
     }
     set(input, value) {
-      this.entries.set(this.key(input), value);
+      const key = this.key(input);
+      this.entries.delete(key);
+      this.entries.set(key, value);
+      while (this.entries.size > this.maxEntries) this.entries.delete(this.entries.keys().next().value);
     }
     clear() {
       this.entries.clear();
@@ -266,7 +279,18 @@
         return void 0;
       },
       request(details) {
-        if (modern?.xmlHttpRequest) return Promise.resolve(modern.xmlHttpRequest(details));
+        if (modern?.xmlHttpRequest) {
+          return new Promise((resolve, reject) => {
+            const request = modern.xmlHttpRequest({
+              ...details,
+              onload: resolve,
+              onerror: (error) => reject(Object.assign(new Error("\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25"), { response: error, status: error?.status || 0 })),
+              ontimeout: (error) => reject(Object.assign(new Error("\u8BF7\u6C42\u8D85\u65F6"), { response: error, status: error?.status || 0 })),
+              onabort: (error) => reject(Object.assign(new Error("\u8BF7\u6C42\u5DF2\u53D6\u6D88"), { response: error, status: error?.status || 0 }))
+            });
+            if (request && typeof request.then === "function") request.then(resolve, reject);
+          });
+        }
         if (typeof scope.GM_xmlhttpRequest === "function") return asPromise(scope.GM_xmlhttpRequest, details);
         return Promise.reject(new Error("\u5F53\u524D\u811A\u672C\u7BA1\u7406\u5668\u4E0D\u652F\u6301\u8DE8\u57DF\u8BF7\u6C42"));
       }
@@ -299,33 +323,105 @@
   }
 
   // src/utils/storage.js
-  var SETTINGS_KEY = "translator.settings.v1";
+  var SETTINGS_KEY_V2 = "translator.settings.v2";
+  var SETTINGS_KEY_V1 = "translator.settings.v1";
+  var BACKUP_KEY = "translator.settings.backup";
+  function isPlainObject(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
   var SettingsStore = class {
     constructor(api) {
       this.api = api;
+      this.currentSettings = null;
+      this.pendingUpdates = [];
+      this.isSaving = false;
     }
     async load() {
-      return normalizeSettings(await this.api.getValue(SETTINGS_KEY, {}));
+      const v2 = await this.readSafe(SETTINGS_KEY_V2);
+      if (isPlainObject(v2)) {
+        this.currentSettings = normalizeSettings(v2);
+        return this.currentSettings;
+      }
+      if (v2 !== void 0) await this.backupCorrupted("v2", v2);
+      const v1 = await this.readSafe(SETTINGS_KEY_V1);
+      if (isPlainObject(v1)) {
+        const settings = normalizeSettings(v1);
+        await this.api.setValue(SETTINGS_KEY_V2, settings);
+        this.currentSettings = settings;
+        return settings;
+      }
+      if (v1 !== void 0) await this.backupCorrupted("v1", v1);
+      this.currentSettings = normalizeSettings({});
+      return this.currentSettings;
     }
     async save(settings) {
-      const normalized = normalizeSettings(settings);
-      await this.api.setValue(SETTINGS_KEY, normalized);
-      return normalized;
+      return this.update(() => settings);
+    }
+    update(updater) {
+      if (typeof updater !== "function") throw new TypeError("Settings updater must be a function");
+      const update = new Promise((resolve, reject) => {
+        this.pendingUpdates.push({ updater, resolve, reject });
+      });
+      void this.flushUpdates();
+      return update;
+    }
+    async flushUpdates() {
+      if (this.isSaving) return;
+      this.isSaving = true;
+      while (this.pendingUpdates.length) {
+        const { updater, resolve, reject } = this.pendingUpdates.shift();
+        try {
+          const current = this.currentSettings || await this.load();
+          const next = normalizeSettings(updater(current));
+          await this.api.setValue(SETTINGS_KEY_V2, next);
+          this.currentSettings = next;
+          resolve(next);
+        } catch (error) {
+          reject(error);
+        }
+      }
+      this.isSaving = false;
+    }
+    async readSafe(key) {
+      try {
+        return await this.api.getValue(key, void 0);
+      } catch (error) {
+        console.error("[translator-userscript]", `\u8BFB\u53D6\u8BBE\u7F6E ${key} \u5931\u8D25`, error);
+        return void 0;
+      }
+    }
+    async backupCorrupted(source, value) {
+      try {
+        await this.api.setValue(BACKUP_KEY, JSON.stringify({ source, value, at: Date.now() }));
+      } catch (error) {
+        console.error("[translator-userscript]", "\u5907\u4EFD\u635F\u574F\u8BBE\u7F6E\u503C\u5931\u8D25", error);
+      }
     }
   };
 
   // src/translator/provider.js
   var ProviderError = class extends Error {
-    constructor(message, { status = 0, cause } = {}) {
+    constructor(message, {
+      status = 0,
+      code = "",
+      serviceMessage = "",
+      retryAfterMs = null,
+      responseText = "",
+      cause
+    } = {}) {
       super(message, { cause });
       this.name = "ProviderError";
-      this.status = status;
+      this.status = Number.isFinite(Number(status)) ? Number(status) : 0;
+      this.code = code ? String(code) : "";
+      this.serviceMessage = serviceMessage ? String(serviceMessage) : "";
+      this.retryAfterMs = Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? retryAfterMs : null;
+      this.responseText = responseText ? String(responseText) : "";
     }
     get isAuthorizationError() {
       return this.status === 401 || this.status === 403;
     }
     get isRetryable() {
-      return this.status === 0 || this.status >= 500;
+      return this.status === 0 || this.status === 408 || this.status === 429 || this.status >= 500;
     }
   };
   var TranslationProvider = class {
@@ -345,6 +441,10 @@
   var API_URL = "https://api-edge.cognitive.microsofttranslator.com";
   var TOKEN_TTL_MS = 8 * 60 * 1e3;
   var MAX_TEXT_LENGTH = 5e4;
+  var MAX_REQUEST_TEXT_LENGTH = 5e4;
+  var MAX_RECOVERY_ATTEMPTS = 2;
+  var BASE_RETRY_DELAY_MS = 500;
+  var MAX_RETRY_DELAY_MS = 3e4;
   var LANGUAGE_ALIASES = {
     zh: "zh-Hans",
     "zh-CN": "zh-Hans",
@@ -352,9 +452,21 @@
     no: "nb",
     sr: "sr-Cyrl"
   };
-  function splitIntoChunks(items, size) {
+  function splitIntoChunks(items, size, maxTextLength = MAX_REQUEST_TEXT_LENGTH) {
     const chunks = [];
-    for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+    let chunk = [];
+    let textLength = 0;
+    for (const item of items) {
+      const nextLength = textLength + item.Text.length;
+      if (chunk.length && (chunk.length >= size || nextLength > maxTextLength)) {
+        chunks.push(chunk);
+        chunk = [];
+        textLength = 0;
+      }
+      chunk.push(item);
+      textLength += item.Text.length;
+    }
+    if (chunk.length) chunks.push(chunk);
     return chunks;
   }
   function splitText(text) {
@@ -369,26 +481,111 @@
     }
     return chunks;
   }
+  function getStatus(response) {
+    const status = Number(response?.status);
+    return Number.isFinite(status) ? status : 0;
+  }
+  function getHeader(response, name) {
+    const normalizedName = name.toLowerCase();
+    const headers = response?.headers;
+    if (headers?.get) {
+      const value = headers.get(name);
+      if (value !== null && value !== void 0) return String(value);
+    }
+    if (headers && typeof headers === "object") {
+      for (const [key, value] of Object.entries(headers)) {
+        if (key.toLowerCase() === normalizedName && value !== null && value !== void 0) return String(value);
+      }
+    }
+    const rawHeaders = [response?.responseHeaders, typeof headers === "string" ? headers : ""];
+    for (const rawHeader of rawHeaders) {
+      if (typeof rawHeader !== "string") continue;
+      for (const line of rawHeader.split(/\r?\n/)) {
+        const separator = line.indexOf(":");
+        if (separator === -1) continue;
+        if (line.slice(0, separator).trim().toLowerCase() === normalizedName) return line.slice(separator + 1).trim();
+      }
+    }
+    return "";
+  }
+  function parseRetryAfter(value) {
+    if (!value) return null;
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1e3);
+    const retryAt = Date.parse(value);
+    return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : null;
+  }
+  function responseContext(response) {
+    const responseText = typeof response?.responseText === "string" ? response.responseText : "";
+    let code = "";
+    let serviceMessage = "";
+    try {
+      const payload = JSON.parse(responseText);
+      const error = payload?.error || payload;
+      if (error && typeof error === "object") {
+        code = error.code ?? error.errorCode ?? "";
+        serviceMessage = error.message ?? error.errorMessage ?? "";
+      }
+    } catch {
+      serviceMessage = responseText.trim();
+    }
+    return {
+      status: getStatus(response),
+      code: String(code || ""),
+      serviceMessage: String(serviceMessage || "").replace(/\s+/g, " ").slice(0, 500),
+      retryAfterMs: parseRetryAfter(getHeader(response, "retry-after")),
+      responseText: responseText.slice(0, 2e3)
+    };
+  }
+  function formatFailureMessage(prefix, context) {
+    const details = [];
+    if (context.status) details.push(`HTTP ${context.status}`);
+    if (context.code) details.push(`\u9519\u8BEF\u7801 ${context.code}`);
+    if (context.serviceMessage) details.push(context.serviceMessage);
+    if (context.retryAfterMs !== null) details.push(`Retry-After ${Math.ceil(context.retryAfterMs / 1e3)} \u79D2`);
+    return details.length ? `${prefix}\uFF08${details.join("\uFF1B")}\uFF09` : prefix;
+  }
+  function toProviderError(prefix, response, cause) {
+    const context = responseContext(response);
+    return new ProviderError(formatFailureMessage(prefix, context), { ...context, cause });
+  }
+  function sleep(delayMs) {
+    return new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
   var MicrosoftProvider = class extends TranslationProvider {
-    constructor(request) {
+    constructor(request, { sleep: wait = sleep, now = () => Date.now() } = {}) {
       super();
       this.request = request;
+      this.sleep = wait;
+      this.now = now;
       this.token = null;
       this.tokenCreatedAt = 0;
+      this.tokenPromise = null;
+      this.requestQueue = Promise.resolve();
+      this.nextAllowedAt = 0;
     }
     normalizeLanguage(language) {
       return LANGUAGE_ALIASES[language] || language;
     }
     async getToken(force = false, timeoutMs = 15e3) {
       if (!force && this.token && Date.now() - this.tokenCreatedAt < TOKEN_TTL_MS) return this.token;
+      if (this.tokenPromise) return this.tokenPromise;
+      this.tokenPromise = this.fetchToken(timeoutMs);
+      try {
+        return await this.tokenPromise;
+      } finally {
+        this.tokenPromise = null;
+      }
+    }
+    async fetchToken(timeoutMs) {
       let response;
       try {
         response = await this.request({ method: "GET", url: AUTH_URL, timeout: timeoutMs });
       } catch (cause) {
-        throw new ProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u6388\u6743\u8BF7\u6C42\u5931\u8D25", { status: cause?.status || 0, cause });
+        throw toProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u6388\u6743\u8BF7\u6C42\u5931\u8D25", cause?.response || cause, cause);
       }
-      if (response.status !== 200 || !response.responseText) {
-        throw new ProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u6388\u6743\u5931\u8D25", { status: response.status || 0 });
+      if (getStatus(response) !== 200 || !response?.responseText) {
+        throw toProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u6388\u6743\u5931\u8D25", response);
       }
       this.token = response.responseText;
       this.tokenCreatedAt = Date.now();
@@ -409,28 +606,62 @@
           data: JSON.stringify(body)
         });
       } catch (cause) {
-        throw new ProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25", { status: cause?.status || 0, cause });
+        throw toProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25", cause?.response || cause, cause);
       }
-      if (response.status < 200 || response.status >= 300) {
-        throw new ProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u8BF7\u6C42\u5931\u8D25", { status: response.status || 0 });
+      const status = getStatus(response);
+      if (status < 200 || status >= 300) {
+        throw toProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u8BF7\u6C42\u5931\u8D25", response);
       }
       try {
         return JSON.parse(response.responseText);
       } catch (cause) {
-        throw new ProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u54CD\u5E94\u683C\u5F0F\u65E0\u6548", { status: response.status || 0, cause });
+        throw toProviderError("\u5FAE\u8F6F\u7FFB\u8BD1\u54CD\u5E94\u683C\u5F0F\u65E0\u6548", response, cause);
       }
     }
-    async requestWithRecovery(path, body, options) {
-      try {
-        return await this.perform(path, body, options);
-      } catch (error) {
-        if (!(error instanceof ProviderError)) throw error;
-        if (error.isAuthorizationError) return this.perform(path, body, options, true);
-        if (error.isRetryable) {
-          await new Promise((resolve) => setTimeout(resolve, 400));
-          return this.perform(path, body, options);
+    getRetryDelay(error, retryIndex) {
+      const exponentialDelay = Math.min(MAX_RETRY_DELAY_MS, BASE_RETRY_DELAY_MS * 2 ** retryIndex);
+      if (error.retryAfterMs === null) return exponentialDelay;
+      return Math.max(exponentialDelay, error.retryAfterMs);
+    }
+    extendCooldown(delayMs) {
+      if (!Number.isFinite(delayMs) || delayMs <= 0) return;
+      this.nextAllowedAt = Math.max(this.nextAllowedAt, this.now() + delayMs);
+    }
+    async enqueueRequest(operation) {
+      const task = this.requestQueue.then(async () => {
+        const cooldownMs = Math.max(0, this.nextAllowedAt - this.now());
+        if (cooldownMs) await this.sleep(cooldownMs);
+        return operation();
+      });
+      this.requestQueue = task.catch(() => void 0);
+      return task;
+    }
+    requestWithRecovery(path, body, options) {
+      return this.enqueueRequest(() => this.requestWithRecoveryInternal(path, body, options));
+    }
+    async requestWithRecoveryInternal(path, body, options) {
+      let retryIndex = 0;
+      let authorizationRetried = false;
+      let forceToken = false;
+      while (true) {
+        try {
+          return await this.perform(path, body, options, forceToken);
+        } catch (error) {
+          if (!(error instanceof ProviderError)) throw error;
+          if (error.isAuthorizationError && !authorizationRetried) {
+            authorizationRetried = true;
+            forceToken = true;
+            continue;
+          }
+          if (!error.isRetryable) throw error;
+          const delayMs = this.getRetryDelay(error, retryIndex);
+          if (delayMs > MAX_RETRY_DELAY_MS) throw error;
+          this.extendCooldown(delayMs);
+          if (retryIndex >= MAX_RECOVERY_ATTEMPTS) throw error;
+          retryIndex += 1;
+          forceToken = false;
+          await this.sleep(delayMs);
         }
-        throw error;
       }
     }
     async translate(text, options) {
@@ -495,7 +726,6 @@
     ".notranslate",
     ".imt-notranslate",
     "[data-no-translate]",
-    '[contenteditable="true"]',
     '[aria-hidden="true"]',
     ".material-icons",
     "material-icon",
@@ -533,9 +763,13 @@
   var NON_TEXTUAL_CONTENT = /^(?:[\d\s\p{P}\p{S}]+|copyright\b.*)$/iu;
   function isInsideSkippedElement(element2) {
     if (!element2) return true;
-    if (element2.closest('[data-translator-ui], [hidden], [contenteditable="true"]')) return true;
-    if (element2.closest(SKIPPED_SELECTOR)) return true;
+    if (element2.closest("[data-translator-ui], [hidden]")) return true;
+    const skippedContainer = element2.closest(SKIPPED_SELECTOR);
+    if (skippedContainer && skippedContainer !== document.documentElement) return true;
     for (let current = element2; current; current = current.parentElement) {
+      const editable = current.getAttribute?.("contenteditable");
+      if (editable !== null && editable.toLowerCase() !== "false") return true;
+      if (current.isContentEditable === true) return true;
       if (SKIPPED_TAGS.has(current.tagName)) return true;
       if (CODE_TAGS.has(current.tagName)) return true;
       const style = getComputedStyle(current);
@@ -549,6 +783,7 @@
   function isTextNodeVisible(node) {
     const range = document.createRange();
     range.selectNodeContents(node);
+    if (typeof range.getBoundingClientRect !== "function") return false;
     const rect = range.getBoundingClientRect();
     if (!rect || rect.width === 0 && rect.height === 0) return false;
     return rect.bottom >= 0 && rect.right >= 0 && rect.top <= window.innerHeight && rect.left <= window.innerWidth;
@@ -592,6 +827,24 @@
       const record = this.records.get(node);
       return Boolean(record && node.nodeValue === record.translated);
     }
+    forget(node) {
+      this.records.delete(node);
+      this.nodes.delete(node);
+    }
+    forgetTree(root) {
+      if (root?.nodeType === 3) {
+        this.forget(root);
+        return;
+      }
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let node;
+      while (node = walker.nextNode()) this.forget(node);
+    }
+    pruneDisconnected() {
+      for (const node of this.nodes) {
+        if (!node.isConnected) this.forget(node);
+      }
+    }
     apply(node, translated) {
       const original = this.sourceFor(node);
       if (typeof original !== "string" || node.nodeValue !== original && !this.records.has(node)) return false;
@@ -605,45 +858,131 @@
       for (const node of this.nodes) {
         const record = this.records.get(node);
         if (!record || !node.isConnected) {
-          this.records.delete(node);
-          this.nodes.delete(node);
+          this.forget(node);
           continue;
         }
         if (node.nodeValue === record.translated) {
           node.nodeValue = record.original;
           restored += 1;
         }
-        this.records.delete(node);
-        this.nodes.delete(node);
+        this.forget(node);
       }
       return restored;
     }
   };
 
   // src/dom/observer.js
+  var TEXT_NODE = 3;
+  var ELEMENT_NODE = 1;
   var IncrementalObserver = class {
-    constructor(onRoots) {
+    constructor(onRoots, { debounceMs = 500 } = {}) {
       this.onRoots = onRoots;
+      this.debounceMs = debounceMs;
       this.observer = null;
+      this.root = null;
+      this.pendingRoots = /* @__PURE__ */ new Set();
+      this.pendingRemovedRoots = /* @__PURE__ */ new Set();
+      this.timer = null;
+      this.flushScheduled = false;
+      this.onVisibilityEvent = (event) => {
+        this.addRoot(event.target);
+        this.scheduleFlush();
+      };
     }
     start(root = document.body) {
       this.stop();
+      this.root = root;
       this.observer = new MutationObserver((mutations) => {
-        const roots = /* @__PURE__ */ new Set();
         for (const mutation of mutations) {
-          if (mutation.type === "characterData") roots.add(mutation.target);
+          if (mutation.type === "characterData") this.addRoot(mutation.target.parentElement || mutation.target);
+          if (mutation.type === "attributes") {
+            this.addRoot(mutation.target);
+            if (mutation.attributeName === "aria-expanded" || mutation.attributeName === "aria-controls" || mutation.attributeName === "aria-owns") {
+              this.addAriaControlledRoots(mutation.target);
+            }
+          }
           for (const node of mutation.addedNodes) {
-            if (node.nodeType === Node.TEXT_NODE || node.nodeType === Node.ELEMENT_NODE) roots.add(node);
+            this.addRoot(node);
+          }
+          for (const node of mutation.removedNodes) {
+            this.addRemovedRoot(node);
           }
         }
-        const compactRoots = [...roots].filter((rootNode) => ![...roots].some((other) => other !== rootNode && other.contains?.(rootNode)));
-        if (compactRoots.length) this.onRoots(compactRoots);
+        this.scheduleFlush();
       });
-      this.observer.observe(root, { childList: true, characterData: true, subtree: true });
+      this.observer.observe(root, {
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: [
+          "class",
+          "style",
+          "hidden",
+          "inert",
+          "aria-hidden",
+          "aria-expanded",
+          "aria-controls",
+          "aria-owns",
+          "open",
+          "data-state",
+          "data-open",
+          "data-expanded",
+          "data-visible"
+        ],
+        subtree: true
+      });
+      root.addEventListener("transitionend", this.onVisibilityEvent, true);
+      root.addEventListener("animationend", this.onVisibilityEvent, true);
+      root.addEventListener("toggle", this.onVisibilityEvent, true);
+    }
+    addRoot(node) {
+      if (node?.nodeType === TEXT_NODE) node = node.parentElement;
+      if (node?.nodeType === ELEMENT_NODE) this.pendingRoots.add(node);
+    }
+    addRemovedRoot(node) {
+      if (node?.nodeType === TEXT_NODE || node?.nodeType === ELEMENT_NODE) this.pendingRemovedRoots.add(node);
+    }
+    addAriaControlledRoots(element2) {
+      const ids = [element2.getAttribute?.("aria-controls"), element2.getAttribute?.("aria-owns")].filter(Boolean).flatMap((value) => value.trim().split(/\s+/));
+      for (const id of ids) this.addRoot(element2.ownerDocument?.getElementById(id));
+    }
+    scheduleFlush() {
+      if (!this.pendingRoots.size && !this.pendingRemovedRoots.size) return;
+      if (this.debounceMs > 0) {
+        if (this.timer) clearTimeout(this.timer);
+        this.flushScheduled = true;
+        this.timer = setTimeout(() => this.flush(), this.debounceMs);
+        return;
+      }
+      if (this.flushScheduled) return;
+      this.flushScheduled = true;
+      queueMicrotask(() => this.flush());
+    }
+    flush() {
+      this.timer = null;
+      this.flushScheduled = false;
+      const roots = this.compactRoots(this.pendingRoots);
+      const removedRoots = this.compactRoots(this.pendingRemovedRoots);
+      this.pendingRoots.clear();
+      this.pendingRemovedRoots.clear();
+      if (roots.length || removedRoots.length) this.onRoots(roots, removedRoots);
+    }
+    compactRoots(roots) {
+      const nodes = [...roots];
+      return nodes.filter((node) => !nodes.some((other) => other !== node && other.contains?.(node)));
     }
     stop() {
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = null;
+      this.flushScheduled = false;
+      this.pendingRoots.clear();
+      this.pendingRemovedRoots.clear();
       this.observer?.disconnect();
       this.observer = null;
+      this.root?.removeEventListener("transitionend", this.onVisibilityEvent, true);
+      this.root?.removeEventListener("animationend", this.onVisibilityEvent, true);
+      this.root?.removeEventListener("toggle", this.onVisibilityEvent, true);
+      this.root = null;
     }
   };
 
@@ -659,9 +998,11 @@
       this.onError = onError;
       this.replacer = new TextReplacer();
       this.queue = Promise.resolve();
+      this.dynamicRoots = /* @__PURE__ */ new Set();
+      this.dynamicTask = null;
       this.enabled = false;
       this.generation = 0;
-      this.observer = new IncrementalObserver((roots) => this.translateDynamicRoots(roots));
+      this.observer = new IncrementalObserver((roots, removedRoots) => this.translateDynamicRoots(roots, removedRoots));
     }
     async translatePage() {
       const generation = ++this.generation;
@@ -670,7 +1011,10 @@
       return this.translateRoot(document.body, { visibleOnly: false, generation });
     }
     async translateVisible() {
-      return this.translateRoot(document.body, { visibleOnly: true, generation: ++this.generation });
+      const generation = ++this.generation;
+      this.enabled = true;
+      if (this.getSettings().translateDynamic) this.observer.start(document.body);
+      return this.translateRoot(document.body, { visibleOnly: true, generation });
     }
     async translateRoot(root, { visibleOnly, generation }) {
       const pending = /* @__PURE__ */ new Map();
@@ -751,29 +1095,75 @@
       if (settings.cacheEnabled) this.cache.set(input, translated);
       return translated;
     }
-    translateDynamicRoots(roots) {
-      if (!this.enabled || !this.getSettings().translateDynamic) return;
-      const generation = this.generation;
-      for (const root of roots) {
-        if (root.nodeType === Node.TEXT_NODE && this.replacer.isOwnTranslation(root)) continue;
-        this.queue = this.queue.then(async () => {
-          if (generation !== this.generation) return;
-          const nodes = [];
-          await scanTextNodesInIdle(root, this.getSettings(), { onChunk: async (chunk) => nodes.push(...chunk) });
-          if (generation === this.generation) await this.translateNodes(nodes, generation);
-        }).catch(this.onError);
+    translateDynamicRoots(roots, removedRoots = []) {
+      for (const root of removedRoots) {
+        if (!root.isConnected) this.replacer.forgetTree(root);
       }
+      this.replacer.pruneDisconnected();
+      if (!this.enabled || !this.getSettings().translateDynamic) return;
+      for (const root of roots) {
+        if (!root || root.nodeType === Node.TEXT_NODE && this.replacer.isOwnTranslation(root)) continue;
+        this.dynamicRoots.add(root);
+      }
+      if (!this.dynamicRoots.size) {
+        this.replacer.pruneDisconnected();
+        return;
+      }
+      return this.scheduleDynamicTranslation();
+    }
+    scheduleDynamicTranslation() {
+      if (this.dynamicTask) return this.dynamicTask;
+      const task = this.queue.then(async () => {
+        const generation = this.generation;
+        if (!this.enabled || !this.getSettings().translateDynamic) return 0;
+        const pendingRoots = this.compactDynamicRoots([...this.dynamicRoots]);
+        this.dynamicRoots.clear();
+        if (generation !== this.generation) return 0;
+        const nodes = [];
+        for (const root of pendingRoots) {
+          if (root.nodeType !== Node.TEXT_NODE && !root.isConnected) continue;
+          await scanTextNodesInIdle(root, this.getSettings(), {
+            onChunk: async (chunk) => nodes.push(...chunk.filter((node) => !this.replacer.isOwnTranslation(node)))
+          });
+        }
+        if (generation !== this.generation) return 0;
+        const translated = await this.translateNodes(nodes, generation);
+        this.replacer.pruneDisconnected();
+        return translated;
+      });
+      this.dynamicTask = task;
+      this.queue = task.catch((error) => {
+        this.onError(error);
+        return 0;
+      });
+      task.then(
+        () => this.finishDynamicTranslation(),
+        () => this.finishDynamicTranslation()
+      );
+      return task;
+    }
+    finishDynamicTranslation() {
+      this.dynamicTask = null;
+      if (this.enabled && this.getSettings().translateDynamic && this.dynamicRoots.size) this.scheduleDynamicTranslation();
+    }
+    compactDynamicRoots(roots) {
+      return roots.filter((root) => !roots.some((other) => other !== root && other.contains?.(root)));
     }
     restore() {
       this.generation += 1;
       this.enabled = false;
+      this.dynamicRoots.clear();
       this.observer.stop();
       return this.replacer.restoreAll();
     }
     refreshDynamicObserver() {
       if (!this.enabled) return;
-      if (this.getSettings().translateDynamic) this.observer.start(document.body);
-      else this.observer.stop();
+      if (this.getSettings().translateDynamic) {
+        if (!this.observer.observer) this.observer.start(document.body);
+      } else {
+        this.dynamicRoots.clear();
+        this.observer.stop();
+      }
     }
   };
 
@@ -1018,7 +1408,7 @@
       this.onStateChange = onStateChange;
       this.mode = normalizeMode(mode, { collapsed });
       this.edgeRestoreMode = [TOOLBAR_MODE.EXPANDED, TOOLBAR_MODE.COLLAPSED].includes(edgeRestoreMode) ? edgeRestoreMode : TOOLBAR_MODE.EXPANDED;
-      this.edgeCenterY = Number.isFinite(Number(edgeCenterY)) ? Number(edgeCenterY) : null;
+      this.edgeCenterY = edgeCenterY !== null && edgeCenterY !== "" && Number.isFinite(Number(edgeCenterY)) ? Number(edgeCenterY) : null;
       this.preferredPosition = position;
       this.autoTranslateForSite = Boolean(autoTranslateForSite);
       this.onToggleSiteAutoTranslate = actions.onToggleSiteAutoTranslate || (() => {
@@ -1075,35 +1465,31 @@
     }
     restoreFromEdge() {
       const edge = this.mode;
-      const centerY = this.edgeCenterY ?? this.currentPosition.top + this.bar.offsetHeight / 2;
+      const centerY = this.edgeCenterY ?? (this.currentPosition?.top ?? EDGE_GAP) + this.bar.offsetHeight / 2;
       this.mode = this.edgeRestoreMode;
       this.edgeCenterY = null;
       this.renderMode();
-      requestAnimationFrame(() => {
-        const width = this.bar.offsetWidth;
-        this.preferredPosition = {
-          left: edge === TOOLBAR_MODE.EDGE_LEFT ? EDGE_GAP : viewportWidth() - width - EDGE_GAP,
-          top: centerY - this.bar.offsetHeight / 2
-        };
-        this.place();
-        this.persist();
-      });
+      const width = this.bar.offsetWidth;
+      this.preferredPosition = {
+        left: edge === TOOLBAR_MODE.EDGE_LEFT ? EDGE_GAP : viewportWidth() - width - EDGE_GAP,
+        top: centerY - this.bar.offsetHeight / 2
+      };
+      this.place();
+      this.persist();
     }
     setMode(mode, persist = true) {
       const previous = this.currentPosition && !this.isEdgeHidden ? { ...this.currentPosition, width: this.bar.offsetWidth } : null;
       this.mode = normalizeMode(mode);
       this.renderMode();
+      if (previous) {
+        const isLeftAnchored = previous.left + previous.width / 2 < viewportWidth() / 2;
+        this.preferredPosition = {
+          left: isLeftAnchored ? previous.left : previous.left + previous.width - this.bar.offsetWidth,
+          top: previous.top
+        };
+      }
+      this.place();
       if (persist) this.persist();
-      requestAnimationFrame(() => {
-        if (previous) {
-          const isLeftAnchored = previous.left + previous.width / 2 < viewportWidth() / 2;
-          this.preferredPosition = {
-            left: isLeftAnchored ? previous.left : previous.left + previous.width - this.bar.offsetWidth,
-            top: previous.top
-          };
-        }
-        this.place();
-      });
     }
     renderMode() {
       const edgeLeft = this.mode === TOOLBAR_MODE.EDGE_LEFT;
@@ -1150,11 +1536,15 @@
     startDrag(event) {
       if (event.button !== 0) return;
       event.preventDefault();
+      this.stopDragging?.();
+      const pointerId = Number.isInteger(event.pointerId) ? event.pointerId : null;
+      if (pointerId !== null) this.dragHandle.setPointerCapture?.(pointerId);
       const rect = this.bar.getBoundingClientRect();
       const origin = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
       const dragStartMode = this.isEdgeHidden ? TOOLBAR_MODE.COLLAPSED : this.mode;
       let moved = false;
       const move = (nextEvent) => {
+        if (pointerId !== null && nextEvent.pointerId !== void 0 && nextEvent.pointerId !== pointerId) return;
         const deltaX = nextEvent.clientX - origin.x;
         const deltaY = nextEvent.clientY - origin.y;
         if (!moved && Math.hypot(deltaX, deltaY) < 4) return;
@@ -1162,9 +1552,15 @@
         this.bar.classList.add("is-dragging");
         this.place({ left: origin.left + deltaX, top: origin.top + deltaY });
       };
-      const end = () => {
+      const end = (nextEvent) => {
+        if (pointerId !== null && nextEvent?.pointerId !== void 0 && nextEvent.pointerId !== pointerId) return;
         document.removeEventListener("pointermove", move, true);
         document.removeEventListener("pointerup", end, true);
+        document.removeEventListener("pointercancel", end, true);
+        if (pointerId !== null && this.dragHandle.hasPointerCapture?.(pointerId)) {
+          this.dragHandle.releasePointerCapture(pointerId);
+        }
+        this.stopDragging = null;
         this.bar.classList.remove("is-dragging");
         if (!moved) return;
         const nextMode = this.snapMode(this.currentPosition, dragStartMode);
@@ -1179,8 +1575,10 @@
         this.place();
         this.persist();
       };
+      this.stopDragging = () => end();
       document.addEventListener("pointermove", move, true);
       document.addEventListener("pointerup", end, true);
+      document.addEventListener("pointercancel", end, true);
     }
     persist() {
       this.onStateChange({
@@ -1192,6 +1590,7 @@
       });
     }
     destroy() {
+      this.stopDragging?.();
       window.removeEventListener("resize", this.onResize);
       window.visualViewport?.removeEventListener("resize", this.onResize);
       cancelAnimationFrame(this.resizeFrame);
@@ -1507,9 +1906,11 @@
       this.toast = toast;
       this.getSettings = getSettings;
       this.translate = translate;
+      this.session = 0;
     }
     open({ text = "", autoTranslate = false } = {}) {
       this.close();
+      this.session += 1;
       const settings = this.getSettings();
       this.source = languageSelect(this.t("sourceLanguage"), settings.sourceLanguage, true);
       this.target = languageSelect(this.t("targetLanguage"), settings.targetLanguage, false);
@@ -1569,6 +1970,7 @@
         return;
       }
       if (this.busy) return;
+      const session = this.session;
       this.busy = true;
       translateButton.disabled = true;
       translateButton.textContent = "\u2026";
@@ -1577,18 +1979,20 @@
       this.copyButton.disabled = true;
       try {
         const translation = await this.translate(text, { sourceLanguage: source.value, targetLanguage: target.value });
-        if (this.result !== result) return;
+        if (this.session !== session || this.result !== result) return;
         result.textContent = translation;
         result.dataset.state = "translated";
         this.copyButton.disabled = false;
       } catch (error) {
-        if (this.result === result) {
+        if (this.session === session && this.result === result) {
           result.textContent = this.t("translationPlaceholder");
           result.dataset.state = "placeholder";
           if (this.copyButton) this.copyButton.disabled = true;
+          this.toast.show(this.t("error", { message: error instanceof Error ? error.message : String(error) }), { duration: 8e3 });
         }
         console.error("[translator-userscript]", error);
       } finally {
+        if (this.session !== session) return;
         this.busy = false;
         if (this.translateButton === translateButton) {
           translateButton.disabled = false;
@@ -1613,6 +2017,7 @@
       if (this.copyButton) this.copyButton.disabled = true;
     }
     close() {
+      this.session += 1;
       this.source?.destroy();
       this.target?.destroy();
       this.source = null;
@@ -1725,6 +2130,24 @@
   };
 
   // src/main.js
+  function mergeSettingsForm(current, next) {
+    return {
+      ...current,
+      sourceLanguage: next.sourceLanguage,
+      targetLanguage: next.targetLanguage,
+      autoTranslate: next.autoTranslate,
+      translateDynamic: next.translateDynamic,
+      showSelectionButton: next.showSelectionButton,
+      cacheEnabled: next.cacheEnabled,
+      batchSize: next.batchSize,
+      timeoutMs: next.timeoutMs
+    };
+  }
+  function formatTranslationError(error) {
+    if (error instanceof ProviderError) return error.message;
+    if (error instanceof Error && error.message) return error.message;
+    return "\u672A\u77E5\u9519\u8BEF";
+  }
   async function bootstrap() {
     if (window.self !== window.top) return;
     if (document.contentType?.includes("xml")) return;
@@ -1742,7 +2165,10 @@
       cache: new MemoryTranslationCache(),
       getSettings: () => settings,
       onProgress: (count) => toast.show(t("translated", { count })),
-      onError: (error) => console.error("[translator-userscript]", error)
+      onError: (error) => {
+        console.error("[translator-userscript]", error);
+        toast.show(t("error", { message: formatTranslationError(error) }), { duration: 8e3 });
+      }
     });
     const popup = new TranslationInputPopup(root, t, toast, {
       getSettings: () => settings,
@@ -1754,6 +2180,7 @@
         await controller.translatePage();
       } catch (error) {
         console.error("[translator-userscript]", error);
+        toast.show(t("error", { message: formatTranslationError(error) }), { duration: 8e3 });
       }
     };
     const runVisible = async () => {
@@ -1762,6 +2189,7 @@
         await controller.translateVisible();
       } catch (error) {
         console.error("[translator-userscript]", error);
+        toast.show(t("error", { message: formatTranslationError(error) }), { duration: 8e3 });
       }
     };
     const restore = () => {
@@ -1770,30 +2198,39 @@
     };
     const siteHostname = normalizeHostname(location.hostname);
     const isSiteAutoTranslateEnabled = () => shouldAutoTranslateSite(siteHostname, settings);
-    const applySiteAutoTranslateChange = async (previousEnabled) => {
-      const enabled = isSiteAutoTranslateEnabled();
+    const applySiteAutoTranslateChange = async (previousEnabled, enabled) => {
       if (enabled === previousEnabled) return;
       if (enabled) await runPage();
       else restore();
     };
     const saveSettings = async (next) => {
-      const previousEnabled = isSiteAutoTranslateEnabled();
-      settings = await settingsStore.save(next);
+      let previousEnabled;
+      const saved = await settingsStore.update((current) => {
+        previousEnabled = shouldAutoTranslateSite(siteHostname, current);
+        return mergeSettingsForm(current, next);
+      });
+      settings = saved;
+      const enabled = isSiteAutoTranslateEnabled();
       controller.refreshDynamicObserver();
-      toolbar?.setSiteAutoTranslateEnabled(isSiteAutoTranslateEnabled());
-      await applySiteAutoTranslateChange(previousEnabled);
+      toolbar?.setSiteAutoTranslateEnabled(enabled);
+      await applySiteAutoTranslateChange(previousEnabled, enabled);
     };
     const showSettings = () => openSettings(dialog, t, settings, saveSettings);
     const openInput = () => popup.open();
     const setSiteAutoTranslate = async (enabled) => {
-      const previousEnabled = isSiteAutoTranslateEnabled();
-      settings = await settingsStore.save({
-        ...settings,
-        siteAutoTranslatePreferences: { ...settings.siteAutoTranslatePreferences, [siteHostname]: enabled }
+      let previousEnabled;
+      const saved = await settingsStore.update((current) => {
+        previousEnabled = shouldAutoTranslateSite(siteHostname, current);
+        return {
+          ...current,
+          siteAutoTranslatePreferences: { ...current.siteAutoTranslatePreferences, [siteHostname]: enabled }
+        };
       });
-      toolbar?.setSiteAutoTranslateEnabled(isSiteAutoTranslateEnabled());
+      settings = saved;
+      const isEnabled = isSiteAutoTranslateEnabled();
+      toolbar?.setSiteAutoTranslateEnabled(isEnabled);
       toast.show(t(enabled ? "siteAutoTranslateEnabled" : "siteAutoTranslateDisabled"));
-      await applySiteAutoTranslateChange(previousEnabled);
+      await applySiteAutoTranslateChange(previousEnabled, isEnabled);
     };
     const runSelection = () => {
       const text = getSelectedText();
@@ -1804,8 +2241,7 @@
       popup.open({ text, autoTranslate: true });
     };
     const saveToolbarState = (patch) => {
-      const next = { ...settings, ...patch };
-      return settingsStore.save(next).then((saved) => {
+      return settingsStore.update((current) => ({ ...current, ...patch })).then((saved) => {
         settings = saved;
         return saved;
       });
